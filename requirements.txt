@@ -1,0 +1,8 @@
+langgraph
+langgraph-cli
+
+langchain
+langchain-google-genai
+python-dotenv
+psycopg[binary]
+pytestnumpy
