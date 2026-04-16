@@ -1,4 +1,5 @@
 from app.state.schema import GraphState
+from app.tools.execution_guardrails import evaluate_execution_guardrails
 from app.tools.audit import write_audit_event
 from app.db.connection import execute_query
 import logging
@@ -17,6 +18,17 @@ def human_review(state: GraphState) -> dict:
     rationale = getattr(rec_obj, "rationale", "") if rec_obj else ""
     suggested = getattr(rec_obj, "suggested_human_action", "") if rec_obj else ""
     missing = list(getattr(rec_obj, "missing_fields", [])) if rec_obj else []
+    validation_result = state.get("validation_result")
+    guardrails = evaluate_execution_guardrails(state)
+    review_payload = {
+        "decision": decision,
+        "validation_status": getattr(validation_result, "status", "UNKNOWN") if validation_result else "UNKNOWN",
+        "reason_codes": list(getattr(validation_result, "reason_codes", [])) if validation_result else [],
+        "missing_fields": missing,
+        "guardrail_reasons": guardrails.reasons,
+        "suggested_human_action": suggested,
+        "memory_context": state.get("memory_context", {}),
+    }
 
     # Persist to human_reviews table
     try:
@@ -27,9 +39,18 @@ def human_review(state: GraphState) -> dict:
     except Exception as e:
         logger.error(f"Failed to persist human review: {e}")
 
-    write_audit_event("human_review", f"Case held for human review. Decision: {decision}", actor_type="HUMAN")
+    audit_entry = write_audit_event(
+        "human_review",
+        f"Case held for human review. Decision: {decision}",
+        actor_type="HUMAN",
+        state=state,
+        payload=review_payload,
+    )
 
     return {
         "messages": [f"[human_review] Case reviewed by a human agent. Decision: {decision}"],
-        "human_review": f"Reviewed: {decision}"
+        "audit_log": [audit_entry],
+        "execution_guardrails": guardrails,
+        "human_review_payload": review_payload,
+        "human_review": f"Reviewed: {decision}. Guardrails: {', '.join(guardrails.reasons)}"
     }

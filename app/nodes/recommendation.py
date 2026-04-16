@@ -1,5 +1,6 @@
 from app.state.schema import GraphState, Recommendation
 from app.tools.audit import write_audit_event
+from app.tools.execution_guardrails import evaluate_execution_guardrails
 import logging
 
 logger = logging.getLogger(__name__)
@@ -13,16 +14,19 @@ def recommendation(state: GraphState) -> dict:
 
     if not validation_result:
         # Fallback if validation somehow didn't run
+        rec = Recommendation(
+            decision="ERROR",
+            rationale="Validation node did not produce a result.",
+            suggested_human_action="Review system logs.",
+            missing_fields=[],
+            executable_action_possible=False,
+            confidence=0.0
+        )
+        guardrails = evaluate_execution_guardrails({**state, "recommendation": rec})
         return {
             "messages": ["[recommendation] ERROR: No ValidationResult found in state."],
-            "recommendation": Recommendation(
-                decision="ERROR",
-                rationale="Validation node did not produce a result.",
-                suggested_human_action="Review system logs.",
-                missing_fields=[],
-                executable_action_possible=False,
-                confidence=0.0
-            )
+            "recommendation": rec,
+            "execution_guardrails": guardrails,
         }
 
     status = validation_result.status
@@ -64,9 +68,21 @@ def recommendation(state: GraphState) -> dict:
         confidence=validation_result.confidence
     )
 
-    write_audit_event("recommendation", f"Decision: {rec.decision}. Executable: {rec.executable_action_possible}")
+    guardrails = evaluate_execution_guardrails({**state, "recommendation": rec})
+    audit_entry = write_audit_event(
+        "recommendation",
+        f"Decision: {rec.decision}. Executable: {rec.executable_action_possible}",
+        state={**state, "recommendation": rec, "execution_guardrails": guardrails},
+        payload={
+            "decision": rec.decision,
+            "guardrail_reasons": guardrails.reasons,
+            "memory_context": state.get("memory_context", {}),
+        },
+    )
 
     return {
         "messages": [f"[recommendation] Generated decision: {rec.decision} (Executable: {rec.executable_action_possible})"],
-        "recommendation": rec
+        "audit_log": [audit_entry],
+        "recommendation": rec,
+        "execution_guardrails": guardrails,
     }

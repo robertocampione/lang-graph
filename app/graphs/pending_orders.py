@@ -8,6 +8,7 @@ from app.nodes.validation import validation
 from app.nodes.recommendation import recommendation
 from app.nodes.auto_execute import auto_execute
 from app.nodes.human_review import human_review
+from app.tools.execution_guardrails import evaluate_execution_guardrails
 
 def route_after_recommendation(state: GraphState) -> str:
     """
@@ -17,14 +18,12 @@ def route_after_recommendation(state: GraphState) -> str:
     rec_obj = state.get("recommendation")
     if not rec_obj:
         return "human_review"
-        
-    decision = getattr(rec_obj, "decision", rec_obj.get("decision") if isinstance(rec_obj, dict) else "UNKNOWN")
-    
-    # Do NOT auto-execute on REQUEST_INFO, BLOCK or ESCALATE
-    if decision == "ALLOW_FOLLOW_ON":
+
+    guardrails = evaluate_execution_guardrails(state)
+    if guardrails.allowed:
         return "auto_execute"
-    else:
-        return "human_review"
+
+    return "human_review"
 
 def build_pending_orders_graph():
     """

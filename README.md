@@ -34,9 +34,13 @@ pending-orders-langgraph/
       rule_retriever.py           # Deterministic rule matching by metadata/keywords
       policy_retriever.py         # Optional vector policy retriever retained for later phases
       audit.py                    # Audit event logger to DB
+      case_history.py             # Lightweight memory helpers over audit/review/execution records
   scripts/
     seed_db.py                    # DB schema creation + seed data
+    run_demo_cases.py             # Curated demo scenarios with optional offline mode
+    evaluate_golden_cases.py      # Offline golden dataset evaluator
   tests/                          # Offline test suite (mocked DB + LLM)
+    fixtures/golden_cases.json    # Stable deterministic evaluation cases
 ```
 
 ### Graph Flow
@@ -119,12 +123,21 @@ To persist `auto_execute` / `human_review` records during a demo, pass:
 PYTHONPATH=. python scripts/run_demo_cases.py --write --persist-actions
 ```
 
+### 9. Run golden evaluation
+
+```bash
+PYTHONPATH=. python scripts/evaluate_golden_cases.py --source offline
+```
+
+The golden evaluator uses `tests/fixtures/golden_cases.json` and curated `TicketStructured` objects. It does not call live LLMs or require a database, so it is suitable for local regression checks and CI-style validation. Add `--json` for machine-readable output.
+
 ## Rule Knowledge Base
 
 Business rules live in `app/knowledge/rules/` as Markdown files with small front matter blocks. The graph retrieves matching rules in `policy_retrieval.py` using deterministic metadata and keyword scoring, then `validation.py` applies explicit Python checks.
 
 Current rule IDs include:
 
+- `core.ambiguous_ticket`
 - `core.same_scope_pending`
 - `core.required_fields`
 - `installation.one_active_installation`
@@ -134,10 +147,47 @@ Current rule IDs include:
 - `bundle.bundle_member_pending`
 - `segment.cbu_vs_ebu_handling`
 
+## LLM Model Roles
+
+The project uses LLMs only for extraction and optional future operator-facing language tasks. Business validation and routing remain deterministic.
+
+Environment-driven model roles:
+
+- `TRIAGE_MODEL`: extracts `TicketStructured` from raw ticket text in `triage.py`
+- `REASONING_MODEL`: reserved for future explanation drafting; it must not decide validation outcomes
+- `UTILITY_MODEL`: reserved for low-risk formatting or summarization helpers
+- `TRIAGE_TEMPERATURE`: defaults to `0` for repeatable extraction
+- `LLM_TIMEOUT_SECONDS`: request timeout for role-based LLM helpers
+- `ENABLE_LLM_TRACE`: enables lightweight trace metadata in graph state
+
+The triage node now records `llm_trace`, `confidence_summary`, and structured `errors` when extraction fails. If the LLM returns malformed output or times out, the graph receives a safe low-confidence `TicketStructured` object instead of crashing.
+
+## Human Review And Execution Guardrails
+
+Automatic execution is protected by deterministic guardrails in `app/tools/execution_guardrails.py`. The graph routes to `auto_execute` only when all of these are true:
+
+- `ENABLE_AUTO_EXECUTE=true`
+- recommendation decision is `ALLOW_FOLLOW_ON`
+- `executable_action_possible=true`
+- validation status is `ALLOW`
+- no validation missing info or blocking conditions exist
+- recommendation and validation confidence meet `AUTO_EXECUTE_MIN_CONFIDENCE`
+- no upstream state errors are present
+
+The `auto_execute` node re-checks the same guardrails defensively before writing execution records. Any failed guardrail routes to `human_review`, where `human_review_payload` includes validation status, reason codes, missing fields, and guardrail reasons for the operator.
+
+## Auditability And Memory
+
+Graph state carries trace fields for `correlation_id`, `case_id`, optional `thread_id`, accumulated `audit_log`, and non-authoritative `memory_context`. Audit writes include node name, actor type, trace identifiers, payload summary, and timestamp. The audit writer still tolerates older call sites and falls back to the legacy DB insert shape if the local database has not been reseeded yet.
+
+`app/tools/case_history.py` reads existing `audit_events`, `human_reviews`, and `execution_log` style data to expose prior cases, prior human review decisions, and recurring missing-info patterns. This memory is shown to recommendation/HITL payloads for operator context only; validation, recommendation decisions, guardrails, and routing remain deterministic.
+
 ## Key Design Decisions
 
 - **LLM is used only for extraction** (triage) — all business decisions are deterministic Python rules in `validation.py`
 - **Rules are retrieved, not delegated**: the local knowledge base improves traceability and rationale, but validation code owns final decisions
-- **Audit trail**: every node writes to `audit_events` for full traceability
+- **Auto-execution is guarded twice**: routing can choose the auto path, but `auto_execute.py` still re-checks deterministic guardrails
+- **Audit trail and memory**: core nodes write enriched audit events and can surface lightweight historical context
+- **Golden evaluation**: stable offline fixtures exercise known allow/block/need-info scenarios without live LLMs
 - **Human-in-the-Loop**: `interrupt_before=["human_review"]` pauses the graph for operator approval
 - **Conditional routing**: only `ALLOW_FOLLOW_ON` triggers auto-execution; everything else requires human review

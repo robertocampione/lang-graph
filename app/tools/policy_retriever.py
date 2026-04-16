@@ -1,8 +1,8 @@
-import os
 from dotenv import load_dotenv
 from langchain_core.vectorstores import InMemoryVectorStore
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_core.documents import Document
+from app.config.settings import settings
 
 load_dotenv()
 
@@ -33,14 +33,17 @@ def _get_vector_store():
     global vector_store
     if vector_store is None:
         # Initialize the real embedding model (requires GOOGLE_API_KEY)
-        embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
+        embeddings_kwargs = {"model": settings.EMBEDDING_MODEL}
+        if settings.GOOGLE_API_KEY:
+            embeddings_kwargs["api_key"] = settings.GOOGLE_API_KEY
+        embeddings = GoogleGenerativeAIEmbeddings(**embeddings_kwargs)
         vector_store = InMemoryVectorStore(embeddings)
         vector_store.add_documents(proximus_policies)
     return vector_store
 
 def retrieve_policy_for_tier(query: str, k: int = 2) -> dict:
     """
-    RAG retriever: performs genuine semantic search using text-embedding-004
+    RAG retriever: performs genuine semantic search using the configured Gemini embedding model
     over the Proximus corporate documents.
     """
     vstore = _get_vector_store()

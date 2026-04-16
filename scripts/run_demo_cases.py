@@ -11,6 +11,7 @@ from app.graphs.pending_orders import route_after_recommendation
 from app.nodes import auto_execute as auto_execute_module
 from app.nodes import human_review as human_review_module
 from app.nodes import integration as integration_module
+from app.nodes import policy_retrieval as policy_retrieval_module
 from app.nodes import recommendation as recommendation_module
 from app.nodes import validation as validation_module
 from app.nodes.auto_execute import auto_execute
@@ -20,12 +21,14 @@ from app.nodes.policy_retrieval import policy_retrieval
 from app.nodes.recommendation import recommendation
 from app.nodes.validation import validation
 from app.state.schema import CustomerContext, InstalledBaseContext, PendingOrderContext, Recommendation, TicketStructured, ValidationResult
+from app.tools.execution_guardrails import evaluate_execution_guardrails
 
 
 @dataclass(frozen=True)
 class DemoCase:
     case_id: str
     title: str
+    scenario: str
     thread_id: str
     ticket_raw: str
     ticket_structured: TicketStructured
@@ -63,9 +66,12 @@ def _ticket(
 
 
 DEMO_CASES = [
+    # Scenario: directive 06 guardrail. A follow-on action must be held because
+    # integration shows physical installation is still open.
     DemoCase(
         case_id="installation-delay-block",
         title="Installation still pending blocks follow-on action",
+        scenario="Directive 06: HITL guardrail blocks auto-execution when installation_pending is true.",
         thread_id="demo-c-1001",
         ticket_raw="Customer C-1001 reports that the fiber installation is delayed and asks to proceed with a follow-on change.",
         ticket_structured=_ticket(
@@ -83,9 +89,12 @@ DEMO_CASES = [
             "Follow-up note: customer called again and asks whether backoffice can approve an exception.",
         ],
     ),
+    # Scenario: directive 04/06 interaction. Same-scope conflict is a
+    # deterministic blocker and must route to human review.
     DemoCase(
         case_id="same-scope-block",
         title="Same mobile scope blocks a second mobile modification",
+        scenario="Directive 06: same-scope deterministic block routes to human review.",
         thread_id="demo-c-1002",
         ticket_raw="Customer C-1002 wants a mobile subscription modification while the mobile order is still pending.",
         ticket_structured=_ticket(
@@ -98,9 +107,12 @@ DEMO_CASES = [
             product_family="Mobile",
         ),
     ),
+    # Scenario: directive 06 green path. Different-scope request has no blockers
+    # and should pass auto-execution guardrails.
     DemoCase(
         case_id="different-scope-allow",
         title="Different scope allows automated follow-on",
+        scenario="Directive 06: allowed recommendation passes execution guardrails and routes to auto_execute.",
         thread_id="demo-c-1002",
         ticket_raw="Customer C-1002 asks for a fiber information update while the current pending order is mobile.",
         ticket_structured=_ticket(
@@ -115,9 +127,12 @@ DEMO_CASES = [
             "Follow-up note: operator confirms the request is informational and not tied to the mobile order.",
         ],
     ),
+    # Scenario: directive 04/06 blocking behavior for scheduled work.
+    # Future-dated pending order must not execute automatically.
     DemoCase(
         case_id="future-dated-block",
         title="Future-dated order blocks automated changes",
+        scenario="Directive 06: future-dated pending order is blocked and requires HITL.",
         thread_id="demo-c-1005",
         ticket_raw="Customer C-1005 asks to change the TV cancellation before the planned future execution date.",
         ticket_structured=_ticket(
@@ -130,9 +145,12 @@ DEMO_CASES = [
             product_family="TV",
         ),
     ),
+    # Scenario: directive 05 missing-info path plus directive 06 guardrails.
+    # Missing customer id must request info and never auto-execute.
     DemoCase(
         case_id="missing-customer-info",
         title="Missing customer identifier requests more information",
+        scenario="Directive 05/06: missing customer_id produces REQUEST_INFO and human review.",
         thread_id="demo-missing-customer",
         ticket_raw="The customer asks for an update on the pending order but did not provide any customer identifier.",
         ticket_structured=_ticket(
@@ -208,6 +226,7 @@ def _patch_writes_for_dry_run() -> None:
         return None
 
     integration_module.write_audit_event = no_audit
+    policy_retrieval_module.write_audit_event = no_audit
     validation_module.write_audit_event = no_audit
     recommendation_module.write_audit_event = no_audit
     auto_execute_module.write_audit_event = no_audit
@@ -231,6 +250,15 @@ def _offline_integration(state: dict[str, Any]) -> dict[str, Any]:
         "customer_context": customer,
         "pending_order_context": order,
         "installed_base_context": assets,
+        "memory_context": {
+            "case_id": state.get("case_id") or customer_id,
+            "correlation_id": state.get("correlation_id") or state.get("case_id") or customer_id,
+            "prior_cases": [],
+            "prior_human_reviews": [],
+            "prior_executions": [],
+            "missing_info_patterns": [],
+            "principle": "offline_demo_memory_is_non_authoritative",
+        },
     }
 
 
@@ -255,9 +283,16 @@ def _model_dump(value: Any) -> Any:
 def _run_pipeline(case: DemoCase, *, source: str, persist_actions: bool, prior_messages: list[str]) -> dict[str, Any]:
     state: dict[str, Any] = {
         "messages": list(prior_messages),
+        "case_id": case.case_id,
+        "correlation_id": case.case_id,
+        "thread_id": case.thread_id,
         "ticket_raw": case.ticket_raw,
         "ticket_structured": case.ticket_structured,
         "retrieved_rules": {},
+        "confidence_summary": {
+            "triage": case.ticket_structured.confidence_score,
+            "overall": case.ticket_structured.confidence_score,
+        },
     }
 
     if source == "offline":
@@ -269,6 +304,7 @@ def _run_pipeline(case: DemoCase, *, source: str, persist_actions: bool, prior_m
     state = _merge(state, validation(state))
     state = _merge(state, recommendation(state))
 
+    state["execution_guardrails"] = evaluate_execution_guardrails(state)
     route = route_after_recommendation(state)
     state["route"] = route
 
@@ -295,10 +331,12 @@ def _print_case_result(case: DemoCase, state: dict[str, Any], *, iteration: int,
     rec: Recommendation = state["recommendation"]
     retrieved = state.get("retrieved_rules", {})
     pending_order = state.get("pending_order_context")
+    guardrails = state.get("execution_guardrails")
 
     print("=" * 92)
     print(f"Case: {case.case_id} | Iteration: {iteration} | Thread: {case.thread_id}")
     print(f"Title: {case.title}")
+    print(f"Scenario: {case.scenario}")
     print(f"Prior thread messages carried into this run: {prior_message_count}")
     print("-" * 92)
     print(f"Ticket: {state['ticket_raw']}")
@@ -310,6 +348,7 @@ def _print_case_result(case: DemoCase, state: dict[str, Any], *, iteration: int,
     print(f"Applied rules: {', '.join(validation_result.rules_used) or 'none'}")
     print(f"Missing fields: {', '.join(validation_result.missing_info) or 'none'}")
     print(f"Recommendation: {rec.decision} | executable={rec.executable_action_possible}")
+    print(f"Execution guardrails: {', '.join(guardrails.reasons) if guardrails else 'not evaluated'}")
     print(f"Route: {state.get('route')}")
     print(f"Human/action result: {state.get('human_review') or state.get('execution_result') or 'none'}")
     print()
@@ -318,6 +357,7 @@ def _print_case_result(case: DemoCase, state: dict[str, Any], *, iteration: int,
 def _as_json_summary(case: DemoCase, state: dict[str, Any], *, iteration: int, prior_message_count: int) -> dict[str, Any]:
     return {
         "case_id": case.case_id,
+        "scenario": case.scenario,
         "iteration": iteration,
         "thread_id": case.thread_id,
         "prior_message_count": prior_message_count,
@@ -326,6 +366,8 @@ def _as_json_summary(case: DemoCase, state: dict[str, Any], *, iteration: int, p
         "retrieved_rule_ids": state.get("retrieved_rules", {}).get("matched_rule_ids", []),
         "validation_result": _model_dump(state.get("validation_result")),
         "recommendation": _model_dump(state.get("recommendation")),
+        "execution_guardrails": _model_dump(state.get("execution_guardrails")),
+        "memory_context": _model_dump(state.get("memory_context")),
         "route": state.get("route"),
         "human_review": state.get("human_review"),
         "execution_result": state.get("execution_result"),
@@ -350,6 +392,7 @@ def run_demo_cases(args: argparse.Namespace) -> list[dict[str, Any]]:
             run_case = DemoCase(
                 case_id=case.case_id,
                 title=case.title,
+                scenario=case.scenario,
                 thread_id=case.thread_id,
                 ticket_raw=ticket_raw,
                 ticket_structured=case.ticket_structured,

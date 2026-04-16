@@ -1,5 +1,6 @@
 from app.state.schema import GraphState, CustomerContext, PendingOrderContext, InstalledBaseContext
 from app.tools.db_services import fetch_customer_context, fetch_pending_order_context, fetch_installed_base_context
+from app.tools.case_history import build_memory_context
 from app.tools.audit import write_audit_event
 from typing import List
 import logging
@@ -30,10 +31,27 @@ def integration(state: GraphState) -> dict:
                f"Pending Orders: {po_data.get('pending_order_id') if po_data else 'None'}. "
                f"Installed Base size: {len(installed_base_context)}.")
 
-    write_audit_event("integration", f"Context loaded. {summary}")
+    updated_state = {
+        **state,
+        "customer_context": customer_context,
+        "pending_order_context": pending_order_context,
+        "installed_base_context": installed_base_context,
+    }
+    memory_context = build_memory_context(updated_state)
+    audit_entry = write_audit_event(
+        "integration",
+        f"Context loaded. {summary}",
+        state=updated_state,
+        payload={
+            "pending_order_id": po_data.get("pending_order_id") if po_data else None,
+            "installed_base_size": len(installed_base_context),
+        },
+    )
 
     return {
         "messages": [f"[integration] Context loaded. {summary}"],
+        "audit_log": [audit_entry],
+        "memory_context": memory_context,
         "customer_context": customer_context,
         "pending_order_context": pending_order_context,
         "installed_base_context": installed_base_context

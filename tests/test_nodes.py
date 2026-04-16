@@ -1,11 +1,16 @@
 import pytest
+from unittest.mock import MagicMock
+from langchain_core.runnables import RunnableLambda
 from app.graphs.pending_orders import build_pending_orders_graph
 from app.nodes.triage import triage
 from app.nodes.integration import integration
 from app.nodes.recommendation import recommendation
 from app.nodes.validation import validation
 from app.state.schema import CustomerContext, PendingOrderContext, Recommendation, ValidationResult
+import app.nodes.triage as triage_module
 
+
+# Scenario group: graph compilation and directive 05 LLM triage hardening.
 def test_graph_compiles_successfully():
     """
     Simula the instantiation and compiling of the workflow graph to ensure
@@ -31,7 +36,95 @@ def test_triage_node(base_state_triage, patch_llm_chain_triage, mock_llm_triage_
     assert parsed_ticket.customer_id == mock_llm_triage_result.customer_id
     assert parsed_ticket.subject == mock_llm_triage_result.subject
     assert len(parsed_ticket.missing_info) == 0
+    assert result["llm_trace"]["triage"]["model_role"] == "triage"
+    assert result["confidence_summary"]["triage"] == mock_llm_triage_result.confidence_score
 
+def test_triage_empty_ticket_returns_safe_state():
+    result = triage({"messages": [], "ticket_raw": "", "retrieved_rules": {}})
+
+    parsed_ticket = result["ticket_structured"]
+    assert parsed_ticket.subject == "Empty Ticket"
+    assert parsed_ticket.confidence_score == 0.0
+    assert "ticket_raw" in parsed_ticket.missing_info
+    assert "customer_id" in parsed_ticket.missing_info
+    assert result["llm_trace"]["triage"]["success"] is False
+    assert result["errors"][0]["code"] == "EMPTY_TICKET"
+
+def test_triage_enforces_missing_customer_id(monkeypatch):
+    llm_result = {
+        "customer_id": None,
+        "address_id": None,
+        "request_type": "status_update",
+        "pending_order_type": None,
+        "scope_type": "fiber",
+        "scope_id": None,
+        "requested_follow_on_action": None,
+        "product_family": "Internet",
+        "subject": "Fiber update",
+        "missing_info": [],
+        "ambiguities": [],
+        "confidence_score": 0.9,
+    }
+    mock_llm = MagicMock()
+    mock_llm.with_structured_output.return_value = RunnableLambda(lambda _x: llm_result)
+    monkeypatch.setattr(triage_module, "default_llm", mock_llm)
+
+    result = triage({"messages": [], "ticket_raw": "Customer asks for a fiber update.", "retrieved_rules": {}})
+
+    parsed_ticket = result["ticket_structured"]
+    assert parsed_ticket.customer_id is None
+    assert "customer_id" in parsed_ticket.missing_info
+    assert parsed_ticket.confidence_score == 0.75
+
+def test_triage_detects_ambiguous_scope(monkeypatch):
+    llm_result = {
+        "customer_id": "C-1002",
+        "address_id": None,
+        "request_type": "modification",
+        "pending_order_type": "modification",
+        "scope_type": "fiber",
+        "scope_id": None,
+        "requested_follow_on_action": None,
+        "product_family": "Internet",
+        "subject": "Fiber and mobile change",
+        "missing_info": [],
+        "ambiguities": [],
+        "confidence_score": 0.95,
+    }
+    mock_llm = MagicMock()
+    mock_llm.with_structured_output.return_value = RunnableLambda(lambda _x: llm_result)
+    monkeypatch.setattr(triage_module, "default_llm", mock_llm)
+
+    result = triage({
+        "messages": [],
+        "ticket_raw": "Customer C-1002 asks for both fiber and mobile subscription changes.",
+        "retrieved_rules": {},
+    })
+
+    parsed_ticket = result["ticket_structured"]
+    assert any("Multiple possible scopes" in item for item in parsed_ticket.ambiguities)
+    assert parsed_ticket.confidence_score == 0.65
+
+def test_triage_malformed_llm_output_falls_back(monkeypatch):
+    mock_llm = MagicMock()
+    mock_llm.with_structured_output.return_value = RunnableLambda(lambda _x: {"customer_id": "C-1001"})
+    monkeypatch.setattr(triage_module, "default_llm", mock_llm)
+
+    result = triage({
+        "messages": [],
+        "ticket_raw": "Customer C-1001 reports an unclear pending order issue.",
+        "retrieved_rules": {},
+    })
+
+    parsed_ticket = result["ticket_structured"]
+    assert parsed_ticket.customer_id == "C-1001"
+    assert "extraction_failed" in parsed_ticket.missing_info
+    assert parsed_ticket.confidence_score == 0.0
+    assert result["llm_trace"]["triage"]["success"] is False
+    assert result["errors"][0]["code"] == "LLM_EXTRACTION_FAILED"
+
+
+# Scenario group: DB integration, local rule retrieval, and deterministic validation.
 def test_integration_node(base_state_triage):
     """
     Test the integration node fetching context based on ticket info.
@@ -57,7 +150,9 @@ from app.nodes.policy_retrieval import policy_retrieval
 from app.nodes.auto_execute import auto_execute
 from app.nodes.human_review import human_review
 from app.graphs.pending_orders import route_after_recommendation
+from app.tools.execution_guardrails import evaluate_execution_guardrails
 from app.tools.rule_loader import load_rule_documents
+
 
 def test_policy_retrieval_node(base_state_triage):
     """
@@ -83,6 +178,7 @@ def test_rule_loader_reads_local_corpus():
     rules = load_rule_documents()
     rule_ids = {rule.rule_id for rule in rules}
 
+    assert "core.ambiguous_ticket" in rule_ids
     assert "core.same_scope_pending" in rule_ids
     assert "core.required_fields" in rule_ids
     assert "installation.one_active_installation" in rule_ids
@@ -131,8 +227,70 @@ def test_validation_blocks_installation_pending(base_state_triage):
 
 def test_validation_uses_db_context_to_resolve_llm_missing_fields(base_state_triage):
     base_state_triage["ticket_structured"].customer_id = "C-1001"
+    base_state_triage["ticket_structured"].missing_info = ["address_id", "scope_id", "pending_order_type"]
+    base_state_triage["ticket_structured"].scope_type = "fiber"
+    base_state_triage["ticket_structured"].pending_order_type = None
+    base_state_triage["pending_order_context"] = PendingOrderContext(
+        pending_order_id="PO-1001", order_type="provision", order_status="in_progress",
+        scope_type="fiber", scope_id="FIB-555", oldest_pending_days=12,
+        planned_execution_date="2026-05-01", installation_pending=True,
+        exception_markers=["delay_reported"]
+    )
+
+    result = validation(base_state_triage)
+
+    assert result["validation_result"].status == "BLOCK"
+    assert result["validation_result"].missing_info == []
+    assert "INSTALLATION_STILL_PENDING" in result["validation_result"].reason_codes
+    assert result["validation_result"].rules_used == ["installation.one_active_installation"]
+
+def test_validation_resolves_pending_order_type_from_db_context(base_state_triage):
+    base_state_triage["ticket_structured"].customer_id = "C-1002"
+    base_state_triage["ticket_structured"].missing_info = ["pending_order_type"]
+    base_state_triage["ticket_structured"].scope_type = "fiber"
+    base_state_triage["ticket_structured"].pending_order_type = None
+    base_state_triage["pending_order_context"] = PendingOrderContext(
+        pending_order_id="PO-1002", order_type="modification", order_status="on_hold",
+        scope_type="mobile", scope_id="MOB-888", oldest_pending_days=2,
+        planned_execution_date="2026-04-20", installation_pending=False,
+        exception_markers=[]
+    )
+
+    result = validation(base_state_triage)
+
+    assert result["validation_result"].status == "ALLOW"
+    assert result["validation_result"].missing_info == []
+    assert result["validation_result"].rules_used == ["scope.different_scope_allowed"]
+
+def test_validation_requires_info_for_ambiguous_ticket(base_state_triage):
+    base_state_triage["ticket_structured"].customer_id = "C-1002"
+    base_state_triage["ticket_structured"].missing_info = ["address_id", "scope_id"]
+    base_state_triage["ticket_structured"].scope_type = "mobile"
+    base_state_triage["ticket_structured"].ambiguities = [
+        "Unclear which pending order the request should apply to",
+        "Multiple possible scopes mentioned: fiber, mobile",
+    ]
+    base_state_triage["pending_order_context"] = PendingOrderContext(
+        pending_order_id="PO-1002", order_type="modification", order_status="on_hold",
+        scope_type="mobile", scope_id="MOB-888", oldest_pending_days=2,
+        planned_execution_date="2026-04-20", installation_pending=False,
+        exception_markers=[]
+    )
+
+    result = validation(base_state_triage)
+
+    assert result["validation_result"].status == "NEED_INFO"
+    assert "AMBIGUOUS_TICKET" in result["validation_result"].reason_codes
+    assert result["validation_result"].missing_info == ["clarify_request_scope"]
+    assert result["validation_result"].rules_used == ["core.ambiguous_ticket"]
+
+def test_validation_ignores_soft_ambiguity_resolved_by_db_context(base_state_triage):
+    base_state_triage["ticket_structured"].customer_id = "C-1001"
     base_state_triage["ticket_structured"].missing_info = ["address_id", "scope_id"]
     base_state_triage["ticket_structured"].scope_type = "fiber"
+    base_state_triage["ticket_structured"].ambiguities = [
+        "The specific scope_type and product_family are inferred from installation but not explicitly stated."
+    ]
     base_state_triage["pending_order_context"] = PendingOrderContext(
         pending_order_id="PO-1001", order_type="provision", order_status="in_progress",
         scope_type="fiber", scope_id="FIB-555", oldest_pending_days=12,
@@ -183,11 +341,22 @@ def test_recommendation_node(base_state_triage):
 
     assert rec.decision == "HOLD_CASE"
     assert "SAME_SCOPE_PENDING" in rec.rationale
+    assert result["execution_guardrails"].required_human_review is True
 
+
+# Scenario group: directive 06 HITL and auto-execution guardrails.
 def test_auto_execute_node(base_state_triage):
     """
     Test that the auto execution correctly logs action.
     """
+    base_state_triage["validation_result"] = ValidationResult(
+        status="ALLOW",
+        reason_codes=["NO_CONFLICTS"],
+        blocking_conditions=[],
+        missing_info=[],
+        rules_used=["scope.different_scope_allowed"],
+        confidence=1.0
+    )
     base_state_triage["recommendation"] = Recommendation(
         decision="ALLOW_FOLLOW_ON", rationale="test", suggested_human_action="test", missing_fields=[], executable_action_possible=True, confidence=1.0
     )
@@ -199,6 +368,85 @@ def test_auto_execute_node(base_state_triage):
     res_dict = json.loads(result["execution_result"])
     assert res_dict["action_taken"] == "ALLOW_FOLLOW_ON"
     assert res_dict["status"] == "success"
+    assert result["execution_guardrails"].allowed is True
+
+def test_auto_execute_blocks_unsafe_direct_call(base_state_triage):
+    base_state_triage["validation_result"] = ValidationResult(
+        status="BLOCK",
+        reason_codes=["SAME_SCOPE_PENDING"],
+        blocking_conditions=["Same scope"],
+        missing_info=[],
+        rules_used=["core.same_scope_pending"],
+        confidence=1.0
+    )
+    base_state_triage["recommendation"] = Recommendation(
+        decision="ALLOW_FOLLOW_ON", rationale="stale", suggested_human_action="test", missing_fields=[], executable_action_possible=True, confidence=1.0
+    )
+
+    result = auto_execute(base_state_triage)
+
+    import json
+    res_dict = json.loads(result["execution_result"])
+    assert res_dict["status"] == "blocked_by_guardrails"
+    assert "VALIDATION_NOT_ALLOW" in res_dict["guardrail_reasons"]
+    assert result["execution_guardrails"].required_human_review is True
+
+def test_execution_guardrails_require_allow_validation(base_state_triage):
+    base_state_triage["validation_result"] = ValidationResult(
+        status="BLOCK",
+        reason_codes=["SAME_SCOPE_PENDING"],
+        blocking_conditions=["Same scope"],
+        missing_info=[],
+        rules_used=["core.same_scope_pending"],
+        confidence=1.0
+    )
+    base_state_triage["recommendation"] = Recommendation(
+        decision="ALLOW_FOLLOW_ON", rationale="stale", suggested_human_action="test", missing_fields=[], executable_action_possible=True, confidence=1.0
+    )
+
+    guardrails = evaluate_execution_guardrails(base_state_triage)
+
+    assert guardrails.allowed is False
+    assert "VALIDATION_NOT_ALLOW" in guardrails.reasons
+    assert "VALIDATION_HAS_BLOCKING_CONDITIONS" in guardrails.reasons
+
+def test_execution_guardrails_block_low_confidence(base_state_triage):
+    base_state_triage["validation_result"] = ValidationResult(
+        status="ALLOW",
+        reason_codes=["NO_CONFLICTS"],
+        blocking_conditions=[],
+        missing_info=[],
+        rules_used=["scope.different_scope_allowed"],
+        confidence=1.0
+    )
+    base_state_triage["recommendation"] = Recommendation(
+        decision="ALLOW_FOLLOW_ON", rationale="weak", suggested_human_action="test", missing_fields=[], executable_action_possible=True, confidence=0.5
+    )
+
+    guardrails = evaluate_execution_guardrails(base_state_triage)
+
+    assert guardrails.allowed is False
+    assert "CONFIDENCE_BELOW_THRESHOLD" in guardrails.reasons
+
+def test_execution_guardrails_block_low_triage_confidence(base_state_triage):
+    base_state_triage["confidence_summary"] = {"triage": 0.6, "overall": 0.6}
+    base_state_triage["validation_result"] = ValidationResult(
+        status="ALLOW",
+        reason_codes=["NO_CONFLICTS"],
+        blocking_conditions=[],
+        missing_info=[],
+        rules_used=["scope.different_scope_allowed"],
+        confidence=1.0
+    )
+    base_state_triage["recommendation"] = Recommendation(
+        decision="ALLOW_FOLLOW_ON", rationale="weak triage", suggested_human_action="test", missing_fields=[], executable_action_possible=True, confidence=1.0
+    )
+
+    guardrails = evaluate_execution_guardrails(base_state_triage)
+
+    assert guardrails.allowed is False
+    assert guardrails.observed_confidence == 0.6
+    assert "TRIAGE_CONFIDENCE_BELOW_THRESHOLD" in guardrails.reasons
 
 def test_routing_logic(base_state_triage):
     """
@@ -211,10 +459,43 @@ def test_routing_logic(base_state_triage):
     assert route_after_recommendation(base_state_triage) == "human_review"
 
     # Allow -> auto_execute
+    base_state_triage["validation_result"] = ValidationResult(
+        status="ALLOW",
+        reason_codes=["NO_CONFLICTS"],
+        blocking_conditions=[],
+        missing_info=[],
+        rules_used=["scope.different_scope_allowed"],
+        confidence=1.0
+    )
     base_state_triage["recommendation"] = Recommendation(
         decision="ALLOW_FOLLOW_ON", rationale="test", suggested_human_action="test", missing_fields=[], executable_action_possible=True, confidence=1.0
     )
     assert route_after_recommendation(base_state_triage) == "auto_execute"
+
+    # Allow-looking but non-executable -> human_review
+    base_state_triage["recommendation"] = Recommendation(
+        decision="ALLOW_FOLLOW_ON", rationale="test", suggested_human_action="test", missing_fields=[], executable_action_possible=False, confidence=1.0
+    )
+    assert route_after_recommendation(base_state_triage) == "human_review"
+
+def test_human_review_payload_includes_guardrails(base_state_triage):
+    base_state_triage["validation_result"] = ValidationResult(
+        status="NEED_INFO",
+        reason_codes=["MISSING_DATA"],
+        blocking_conditions=["Missing customer"],
+        missing_info=["customer_id"],
+        rules_used=["core.required_fields"],
+        confidence=1.0
+    )
+    base_state_triage["recommendation"] = Recommendation(
+        decision="REQUEST_INFO", rationale="test", suggested_human_action="Ask for customer ID", missing_fields=["customer_id"], executable_action_possible=False, confidence=1.0
+    )
+
+    result = human_review(base_state_triage)
+
+    assert result["execution_guardrails"].required_human_review is True
+    assert result["human_review_payload"]["validation_status"] == "NEED_INFO"
+    assert "DECISION_NOT_ALLOW_FOLLOW_ON" in result["human_review_payload"]["guardrail_reasons"]
 
 def test_end_to_end_graph(base_state_triage, patch_llm_chain_triage):
     """

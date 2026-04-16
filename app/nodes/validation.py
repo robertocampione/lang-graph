@@ -53,11 +53,57 @@ def _effective_missing_info(ticket, po_context) -> list[str]:
             getattr(ticket, "scope_type", None) or getattr(po_context, "scope_type", None)
         ):
             continue
+        if normalized == "pending_order_type" and (
+            getattr(ticket, "pending_order_type", None) or getattr(po_context, "order_type", None)
+        ):
+            continue
         if normalized in {"scope_id", "address_id", "pending_order_id"} and po_context:
             continue
         effective_missing.append(normalized)
 
     return list(dict.fromkeys(effective_missing))
+
+
+def _scope_matches_pending_order(ticket, po_context) -> bool:
+    ticket_scope = str(getattr(ticket, "scope_type", "") or "").strip().lower()
+    pending_scope = str(getattr(po_context, "scope_type", "") or "").strip().lower()
+    return bool(ticket_scope and pending_scope and ticket_scope == pending_scope)
+
+
+def _ambiguity_resolved_by_context(ambiguity: str, ticket, po_context) -> bool:
+    if not po_context:
+        return False
+
+    text = ambiguity.lower()
+    hard_ambiguity_markers = [
+        "multiple",
+        "contradictory",
+        "unclear which pending order",
+        "which pending order",
+        "both fiber and mobile",
+    ]
+    if any(marker in text for marker in hard_ambiguity_markers):
+        return False
+
+    soft_inference_markers = [
+        "inferred",
+        "not explicitly stated",
+        "specific scope_type",
+        "product_family",
+    ]
+    return _scope_matches_pending_order(ticket, po_context) and any(marker in text for marker in soft_inference_markers)
+
+
+def _effective_ambiguities(ticket, po_context) -> list[str]:
+    ambiguities = [
+        str(item).strip()
+        for item in getattr(ticket, "ambiguities", []) or []
+        if str(item).strip()
+    ]
+    return list(dict.fromkeys(
+        item for item in ambiguities
+        if not _ambiguity_resolved_by_context(item, ticket, po_context)
+    ))
 
 
 def validation(state: GraphState) -> dict:
@@ -73,6 +119,7 @@ def validation(state: GraphState) -> dict:
     reason_codes = []
     blocking_conditions = []
     missing_info = _effective_missing_info(ticket, po_context) if ticket else []
+    ambiguities = _effective_ambiguities(ticket, po_context) if ticket else []
     rules_used = []
     
     # 1. Missing Info check
@@ -81,8 +128,16 @@ def validation(state: GraphState) -> dict:
         reason_codes.append("MISSING_DATA")
         blocking_conditions.append(f"Cannot process ticket due to missing fields: {', '.join(missing_info)}")
         rules_used.append("core.required_fields")
-        
-    # 2. Deterministic Pending Order checks (Only if we have required info)
+
+    # 2. Ambiguity check. LLM can detect ambiguity, but validation deterministically decides to stop.
+    elif ambiguities:
+        status = "NEED_INFO"
+        reason_codes.append("AMBIGUOUS_TICKET")
+        missing_info.append("clarify_request_scope")
+        blocking_conditions.append("Cannot process ticket automatically because the request is ambiguous: " + "; ".join(ambiguities))
+        rules_used.append("core.ambiguous_ticket")
+
+    # 3. Deterministic Pending Order checks (Only if we have required info and no ambiguity)
     elif po_context and ticket:
         markers = _exception_markers(po_context)
 
@@ -125,9 +180,15 @@ def validation(state: GraphState) -> dict:
         confidence=1.0 # 100% deterministic rules
     )
 
-    write_audit_event("validation", f"Status: {status}. Reasons: {', '.join(reason_codes)}")
+    audit_entry = write_audit_event(
+        "validation",
+        f"Status: {status}. Reasons: {', '.join(reason_codes)}",
+        state=state,
+        payload={"status": status, "reason_codes": reason_codes, "rules_used": rules_used},
+    )
 
     return {
         "messages": [f"[validation] Completed. Status: {status}. Reasons: {', '.join(reason_codes)}"],
+        "audit_log": [audit_entry],
         "validation_result": val_result
     }

@@ -1,5 +1,5 @@
 import operator
-from typing import TypedDict, Annotated, List, Dict, Any, Optional
+from typing import TypedDict, Annotated, List, Dict, Any, Optional, NotRequired
 from pydantic import BaseModel, Field
 
 # --- Core Business Models ---
@@ -66,6 +66,14 @@ class Recommendation(BaseModel):
     executable_action_possible: bool = Field(description="True if auto-execute tool can handle it.")
     confidence: float = Field(description="Confidence translation")
 
+class ExecutionGuardrailResult(BaseModel):
+    """Deterministic guardrail outcome before automated execution."""
+    allowed: bool = Field(description="True only if automatic execution is permitted")
+    reasons: List[str] = Field(description="Technical reasons that allowed or blocked execution")
+    required_human_review: bool = Field(description="True when the graph should route to HITL")
+    min_confidence: float = Field(description="Configured minimum confidence for auto-execution")
+    observed_confidence: float = Field(description="Recommendation or validation confidence observed")
+
 # --- LangGraph Root State ---
 
 class GraphState(TypedDict):
@@ -75,6 +83,9 @@ class GraphState(TypedDict):
     """
     messages: Annotated[list, operator.add]
     ticket_raw: str
+    correlation_id: NotRequired[str]
+    case_id: NotRequired[str]
+    thread_id: NotRequired[str]
 
     # Information Extracted
     ticket_structured: TicketStructured
@@ -96,3 +107,12 @@ class GraphState(TypedDict):
     # Human Override / Final Execution
     human_review: str
     execution_result: str
+    execution_guardrails: NotRequired[ExecutionGuardrailResult]
+    human_review_payload: NotRequired[Dict[str, Any]]
+
+    # Optional observability fields
+    audit_log: Annotated[list, operator.add]
+    memory_context: NotRequired[Dict[str, Any]]
+    llm_trace: NotRequired[Dict[str, Any]]
+    confidence_summary: NotRequired[Dict[str, Any]]
+    errors: NotRequired[List[Dict[str, Any]]]

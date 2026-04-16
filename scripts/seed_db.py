@@ -72,7 +72,11 @@ CREATE TABLE audit_events (
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     node_name VARCHAR(50),
     summary TEXT,
-    actor_type VARCHAR(50)
+    actor_type VARCHAR(50),
+    correlation_id VARCHAR(100),
+    case_id VARCHAR(100),
+    thread_id VARCHAR(100),
+    payload_summary JSONB
 );
 """
 
