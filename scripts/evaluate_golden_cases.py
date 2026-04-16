@@ -13,7 +13,17 @@ from app.nodes import validation as validation_module
 from app.nodes.policy_retrieval import policy_retrieval
 from app.nodes.recommendation import recommendation
 from app.nodes.validation import validation
-from app.state.schema import CustomerContext, InstalledBaseContext, PendingOrderContext, TicketStructured
+from app.state.schema import (
+    BciCaseContext,
+    BundleContext,
+    CustomerContext,
+    InstalledAssetContext,
+    InstalledBaseContext,
+    PendingOrderContext,
+    RequestedSecondOrder,
+    SaltoOrderContext,
+    TicketStructured,
+)
 
 
 DEFAULT_FIXTURE = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "golden_cases.json"
@@ -50,9 +60,11 @@ def load_cases(path: str | Path = DEFAULT_FIXTURE) -> list[dict[str, Any]]:
 def build_state(case: dict[str, Any]) -> dict[str, Any]:
     ticket = TicketStructured(**case["ticket_structured"])
     pending_order_data = case.get("pending_order_context")
+    selected_salto_order_data = case.get("selected_salto_order")
     installed_base_data = case.get("installed_base_context") or []
+    installed_assets_data = case.get("installed_assets") or installed_base_data
 
-    return {
+    state = {
         "messages": [],
         "case_id": case["case_id"],
         "correlation_id": case["case_id"],
@@ -60,8 +72,15 @@ def build_state(case: dict[str, Any]) -> dict[str, Any]:
         "ticket_raw": case["ticket_raw"],
         "ticket_structured": ticket,
         "customer_context": CustomerContext(**case["customer_context"]),
+        "bci_case_context": BciCaseContext(**case["bci_case_context"]) if case.get("bci_case_context") else None,
         "pending_order_context": PendingOrderContext(**pending_order_data) if pending_order_data else None,
+        "selected_salto_order": SaltoOrderContext(**selected_salto_order_data) if selected_salto_order_data else None,
+        "salto_orders": [SaltoOrderContext(**item) for item in case.get("salto_orders", [])],
+        "bundle_context": BundleContext(**case["bundle_context"]) if case.get("bundle_context") else None,
+        "requested_second_order": RequestedSecondOrder(**case["requested_second_order"]) if case.get("requested_second_order") else None,
+        "compatibility_decision": case.get("compatibility_decision"),
         "installed_base_context": [InstalledBaseContext(**item) for item in installed_base_data],
+        "installed_assets": [InstalledAssetContext(**item) for item in installed_assets_data],
         "retrieved_rules": {},
         "memory_context": {
             "case_id": case["case_id"],
@@ -74,6 +93,7 @@ def build_state(case: dict[str, Any]) -> dict[str, Any]:
         },
         "confidence_summary": {"triage": ticket.confidence_score, "overall": ticket.confidence_score},
     }
+    return state
 
 
 def _merge(state: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
@@ -98,6 +118,7 @@ def run_case(case: dict[str, Any]) -> dict[str, Any]:
     validation_result = state["validation_result"]
     recommendation_result = state["recommendation"]
     guardrails = state["execution_guardrails"]
+    action_plan = state.get("action_plan")
 
     return {
         "case_id": case["case_id"],
@@ -108,6 +129,8 @@ def run_case(case: dict[str, Any]) -> dict[str, Any]:
         "recommendation_decision": recommendation_result.decision,
         "guardrails_allowed": guardrails.allowed,
         "hitl_required": guardrails.required_human_review,
+        "action_plan_action_type": getattr(action_plan, "action_type", None),
+        "auto_eligible": getattr(action_plan, "auto_eligible", None),
         "state": state,
     }
 
@@ -122,6 +145,10 @@ def compare_case_result(case: dict[str, Any], result: dict[str, Any]) -> list[st
         ("guardrails_allowed", expected["guardrails_allowed"], result["guardrails_allowed"]),
         ("hitl_required", expected["hitl_required"], result["hitl_required"]),
     ]
+    if "action_plan_action_type" in expected:
+        comparisons.append(("action_plan_action_type", expected["action_plan_action_type"], result["action_plan_action_type"]))
+    if "auto_eligible" in expected:
+        comparisons.append(("auto_eligible", expected["auto_eligible"], result["auto_eligible"]))
     for field, expected_value, actual_value in comparisons:
         if expected_value != actual_value:
             mismatches.append(f"{field}: expected {expected_value!r}, got {actual_value!r}")
@@ -167,7 +194,7 @@ def _print_report(summary: dict[str, Any]) -> None:
         status = "PASS" if result["passed"] else "FAIL"
         print(f"{status} {result['case_id']} - {result['title']}")
         print(f"  validation={result['validation_status']} reasons={', '.join(result['reason_codes']) or 'none'}")
-        print(f"  recommendation={result['recommendation_decision']} guardrails_allowed={result['guardrails_allowed']} hitl_required={result['hitl_required']}")
+        print(f"  recommendation={result['recommendation_decision']} action={result.get('action_plan_action_type')} auto_eligible={result.get('auto_eligible')} guardrails_allowed={result['guardrails_allowed']} hitl_required={result['hitl_required']}")
         for mismatch in result["mismatches"]:
             print(f"  mismatch: {mismatch}")
     print("=" * 88)

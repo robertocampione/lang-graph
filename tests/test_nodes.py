@@ -6,7 +6,7 @@ from app.nodes.triage import triage
 from app.nodes.integration import integration
 from app.nodes.recommendation import recommendation
 from app.nodes.validation import validation
-from app.state.schema import CustomerContext, PendingOrderContext, Recommendation, ValidationResult
+from app.state.schema import ActionPlan, CustomerContext, PendingOrderContext, Recommendation, ValidationResult
 import app.nodes.triage as triage_module
 
 
@@ -321,6 +321,83 @@ def test_validation_allows_explicit_exception(base_state_triage):
     assert "EXPLICIT_EXCEPTION_ALLOWED" in result["validation_result"].reason_codes
     assert "exceptions.explicit_non_conflicting_exception" in result["validation_result"].rules_used
 
+
+def test_validation_blocks_bundle_member(base_state_triage):
+    base_state_triage["ticket_structured"].missing_info = []
+    base_state_triage["ticket_structured"].scope_type = "tv"
+    base_state_triage["ticket_structured"].scope_id = "TV-777"
+    base_state_triage["bundle_context"] = {
+        "bundle_id": "BUN-777",
+        "customer_id": "C-1007",
+        "address_id": "ADDR-1007-A",
+        "member_scope_ids": ["FIB-777", "TV-777"],
+        "member_asset_ids": ["AST-777-I", "AST-777-TV"],
+    }
+    base_state_triage["pending_order_context"] = PendingOrderContext(
+        pending_order_id="PO-1007", order_type="bundle", order_status="in_progress",
+        scope_type="bundle", scope_id="BUN-777", bundle_id="BUN-777",
+        oldest_pending_days=1, planned_execution_date=None
+    )
+
+    result = validation(base_state_triage)
+
+    assert result["validation_result"].status == "BLOCK"
+    assert result["validation_result"].reason_codes == ["BUNDLE_MEMBER_BLOCKED"]
+
+
+def test_validation_uses_pmit_mobile_matrix_accept(base_state_triage):
+    base_state_triage["customer_context"].segment = "PMIT_MOBILE"
+    base_state_triage["ticket_structured"].missing_info = []
+    base_state_triage["ticket_structured"].scope_type = "mobile"
+    base_state_triage["ticket_structured"].scope_id = "MOB-555"
+    base_state_triage["ticket_structured"].requested_action = "add_roaming_option"
+    base_state_triage["pending_order_context"] = PendingOrderContext(
+        pending_order_id="PO-1008", order_type="provision", order_status="in_progress",
+        scope_type="mobile", scope_id="MOB-555", oldest_pending_days=10,
+        planned_execution_date=None, exception_markers=["pmit_sync"]
+    )
+    base_state_triage["compatibility_decision"] = {
+        "decision": "ACCEPT",
+        "reason": "Matrix allows roaming.",
+    }
+
+    result = validation(base_state_triage)
+
+    assert result["validation_result"].status == "ALLOW"
+    assert result["validation_result"].reason_codes == ["PMIT_MATRIX_ACCEPT"]
+
+
+def test_validation_blocks_sim_exception_exclusion(base_state_triage):
+    base_state_triage["ticket_structured"].missing_info = []
+    base_state_triage["ticket_structured"].scope_type = "mobile"
+    base_state_triage["ticket_structured"].request_type = "sim_swap"
+    base_state_triage["pending_order_context"] = PendingOrderContext(
+        pending_order_id="PO-1010", order_type="provision", order_status="in_progress",
+        scope_type="mobile", scope_id="MOB-1010", oldest_pending_days=1,
+        planned_execution_date=None, exception_markers=["sim_exception"],
+        exclusion_markers=["duo_card"]
+    )
+
+    result = validation(base_state_triage)
+
+    assert result["validation_result"].status == "BLOCK"
+    assert result["validation_result"].reason_codes == ["SIM_EXCEPTION_EXCLUDED"]
+
+
+def test_validation_blocks_ponr_final_disconnect(base_state_triage):
+    base_state_triage["ticket_structured"].missing_info = []
+    base_state_triage["ticket_structured"].scope_type = "fiber"
+    base_state_triage["pending_order_context"] = PendingOrderContext(
+        pending_order_id="PO-1011", order_type="port_out", order_status="disconnecting",
+        scope_type="fiber", scope_id="FIB-1011", oldest_pending_days=1,
+        planned_execution_date=None, final_disconnect=True, ponr_reached=False
+    )
+
+    result = validation(base_state_triage)
+
+    assert result["validation_result"].status == "BLOCK"
+    assert result["validation_result"].reason_codes == ["PONR_BLOCK"]
+
 def test_recommendation_node(base_state_triage):
     """
     Test the recommendation formatting logic from validation result.
@@ -447,6 +524,33 @@ def test_execution_guardrails_block_low_triage_confidence(base_state_triage):
     assert guardrails.allowed is False
     assert guardrails.observed_confidence == 0.6
     assert "TRIAGE_CONFIDENCE_BELOW_THRESHOLD" in guardrails.reasons
+
+
+def test_execution_guardrails_require_dry_run_action_plan(base_state_triage):
+    base_state_triage["validation_result"] = ValidationResult(
+        status="ALLOW",
+        reason_codes=["NO_CONFLICTS"],
+        blocking_conditions=[],
+        missing_info=[],
+        rules_used=["scope.different_scope_allowed"],
+        confidence=1.0
+    )
+    base_state_triage["recommendation"] = Recommendation(
+        decision="ALLOW_FOLLOW_ON", rationale="test", suggested_human_action="test",
+        missing_fields=[], executable_action_possible=True, confidence=1.0
+    )
+    base_state_triage["action_plan"] = ActionPlan(
+        action_type="PREPARE_SECOND_ORDER",
+        target_system="SALTO",
+        summary="Human-only action",
+        auto_eligible=False,
+    )
+
+    guardrails = evaluate_execution_guardrails(base_state_triage)
+
+    assert guardrails.allowed is False
+    assert "ACTION_PLAN_NOT_AUTO_ELIGIBLE" in guardrails.reasons
+    assert "ACTION_PLAN_NOT_DRY_RUN" in guardrails.reasons
 
 def test_routing_logic(base_state_triage):
     """

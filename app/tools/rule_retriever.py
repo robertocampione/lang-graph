@@ -62,12 +62,18 @@ def _score_rule(rule: RuleDocument, context: dict[str, Any]) -> int:
 def build_rule_context(state: dict[str, Any]) -> dict[str, Any]:
     ticket = state.get("ticket_structured")
     customer_context = state.get("customer_context")
-    pending_order_context = state.get("pending_order_context")
+    pending_order_context = state.get("selected_salto_order") or state.get("pending_order_context")
+    requested = state.get("requested_second_order")
+    requested_scope = getattr(requested, "scope", None) if requested else None
 
     return {
         "segment": getattr(customer_context, "segment", None) or getattr(customer_context, "tier", None) or "all",
-        "scope_type": getattr(ticket, "scope_type", None) or getattr(pending_order_context, "scope_type", None),
-        "request_type": getattr(ticket, "request_type", None),
+        "scope_type": (
+            getattr(ticket, "scope_type", None)
+            or getattr(requested_scope, "scope_type", None)
+            or getattr(pending_order_context, "scope_type", None)
+        ),
+        "request_type": getattr(ticket, "requested_action", None) or getattr(ticket, "request_type", None),
         "pending_order_type": (
             getattr(ticket, "pending_order_type", None)
             or getattr(pending_order_context, "order_type", None)
@@ -77,6 +83,7 @@ def build_rule_context(state: dict[str, Any]) -> dict[str, Any]:
             for item in [
                 state.get("ticket_raw", ""),
                 getattr(ticket, "subject", "") if ticket else "",
+                getattr(ticket, "requested_action", "") if ticket else "",
             ]
             if item
         ),

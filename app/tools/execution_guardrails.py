@@ -21,6 +21,7 @@ def evaluate_execution_guardrails(state: dict[str, Any]) -> ExecutionGuardrailRe
     guarded as well.
     """
     recommendation = state.get("recommendation")
+    action_plan = state.get("action_plan")
     validation_result = state.get("validation_result")
     confidence_summary = state.get("confidence_summary") or {}
     reasons: list[str] = []
@@ -42,6 +43,19 @@ def evaluate_execution_guardrails(state: dict[str, Any]) -> ExecutionGuardrailRe
             reasons.append("EXECUTABLE_FLAG_FALSE")
         if observed_confidence < settings.AUTO_EXECUTE_MIN_CONFIDENCE:
             reasons.append("CONFIDENCE_BELOW_THRESHOLD")
+
+    if action_plan:
+        action_type = _get_value(action_plan, "action_type", "UNKNOWN")
+        auto_eligible = bool(_get_value(action_plan, "auto_eligible", False))
+        target_system = _get_value(action_plan, "target_system", "UNKNOWN")
+        allowed_dry_run_actions = {"INTRODUCE_SECOND_ORDER_DRY_RUN", "AMEND_ORDER_DRY_RUN"}
+
+        if not auto_eligible:
+            reasons.append("ACTION_PLAN_NOT_AUTO_ELIGIBLE")
+        if action_type not in allowed_dry_run_actions:
+            reasons.append("ACTION_PLAN_NOT_DRY_RUN")
+        if target_system != "SALTO":
+            reasons.append("ACTION_PLAN_TARGET_NOT_SALTO")
 
     if not validation_result:
         reasons.append("MISSING_VALIDATION_RESULT")

@@ -12,11 +12,12 @@ pending_order_types: [all]
 
 # Segment-specific pending order handling
 
-Consumer, enterprise, and PMIT Mobile-style cases can require different operational handling even when the technical order shape is similar.
+Consumer, PMIT Fix, EBU, and PMIT Mobile cases can require different operational handling even when the technical order shape is similar.
 
 Guidance:
-- CBU cases should remain conservative when customer identity or scope is incomplete.
-- EBU cases may require SLA-aware escalation when the customer tier is high.
-- PMIT Mobile placeholder cases should be reviewed when source markers are incomplete or contradictory.
+- CBU cases follow the restrictive bundle, fixed, TV, and installation rules.
+- PMIT Fix follows the same restrictive logic as CBU.
+- EBU fixed-line cases still respect same-scope blockers; SLA/tier can affect escalation, not the deterministic blocker itself.
+- PMIT Mobile standalone cases use a cross-order matrix where rows are pending order types, columns are follow-on actions, and values are Accept or Block.
 
-This rule is currently retrieval and explanation knowledge. It must not override core deterministic blockers without explicit implementation.
+This rule must not override core deterministic blockers except where PMIT Mobile matrix behavior is explicitly implemented.

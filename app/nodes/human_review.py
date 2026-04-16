@@ -19,6 +19,7 @@ def human_review(state: GraphState) -> dict:
     suggested = getattr(rec_obj, "suggested_human_action", "") if rec_obj else ""
     missing = list(getattr(rec_obj, "missing_fields", [])) if rec_obj else []
     validation_result = state.get("validation_result")
+    action_plan = state.get("action_plan")
     guardrails = evaluate_execution_guardrails(state)
     review_payload = {
         "decision": decision,
@@ -27,6 +28,9 @@ def human_review(state: GraphState) -> dict:
         "missing_fields": missing,
         "guardrail_reasons": guardrails.reasons,
         "suggested_human_action": suggested,
+        "action_type": getattr(action_plan, "action_type", None) if action_plan else None,
+        "target_system": getattr(action_plan, "target_system", None) if action_plan else None,
+        "auto_eligible": getattr(action_plan, "auto_eligible", False) if action_plan else False,
         "memory_context": state.get("memory_context", {}),
     }
 

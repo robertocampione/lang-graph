@@ -193,10 +193,18 @@ def test_unknown_customer_remains_need_info(base_state_triage):
 def test_golden_fixture_schema_valid():
     cases = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
 
-    assert 12 <= len(cases) <= 16
+    assert 30 <= len(cases) <= 40
     for case in cases:
         assert {"case_id", "title", "scenario", "ticket_raw", "ticket_structured", "expected"} <= set(case)
-        assert {"validation_status", "reason_codes", "recommendation_decision", "guardrails_allowed", "hitl_required"} <= set(case["expected"])
+        assert {
+            "validation_status",
+            "reason_codes",
+            "recommendation_decision",
+            "action_plan_action_type",
+            "auto_eligible",
+            "guardrails_allowed",
+            "hitl_required",
+        } <= set(case["expected"])
 
 
 def test_golden_evaluation_comparison_logic_reports_mismatch():

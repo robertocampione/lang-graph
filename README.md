@@ -1,7 +1,7 @@
 # Pending Orders LangGraph
 
 An enterprise-grade LangGraph orchestrator for telecom pending order management.
-Built with deterministic validation, PostgreSQL persistence, local business-rule retrieval, and Human-in-the-Loop controls.
+The current PoC simulation is aligned to a Proximus-style BCI + SALTO workflow: BCI is the unstructured case intake system, SALTO is the simulated customer, order, installed-base, milestone, and dry-run execution system.
 
 ## Architecture Overview
 
@@ -20,16 +20,16 @@ pending-orders-langgraph/
       rules/                      # Local Markdown business rule corpus
     nodes/
       triage.py                   # LLM-based ticket parsing
-      integration.py              # Load customer/order/asset context from DB
+      integration.py              # Load BCI case + SALTO customer/order/asset context from DB
       policy_retrieval.py         # Metadata/keyword retrieval over local business rules
       validation.py               # Deterministic business rule engine (no LLM)
-      recommendation.py           # Format validation output for humans
-      auto_execute.py             # Persist auto-approved actions
+      recommendation.py           # Produce operator recommendation + ActionPlan
+      auto_execute.py             # Persist guarded dry-run SALTO actions
       human_review.py             # Persist escalated cases for review
     graphs/
       pending_orders.py           # StateGraph construction + conditional routing
     tools/
-      db_services.py              # PostgreSQL query layer for domain data
+      db_services.py              # Explicit BCI/SALTO PostgreSQL query helpers
       rule_loader.py              # Markdown rule corpus loader
       rule_retriever.py           # Deterministic rule matching by metadata/keywords
       policy_retriever.py         # Optional vector policy retriever retained for later phases
@@ -46,10 +46,14 @@ pending-orders-langgraph/
 ### Graph Flow
 
 ```
-triage → integration → policy_retrieval → validation → recommendation → [conditional]
-                                                                            ├── auto_execute → END
-                                                                            └── human_review → END (interrupt_before)
+BCI triage → BCI/SALTO integration → policy_retrieval → deterministic validation
+    → recommendation + action_plan → [conditional]
+                                  ├── auto_execute dry-run → END
+                                  └── human_review → END (interrupt_before)
 ```
+
+Phase 1 is the operator-assist path: the graph explains what the back-office agent should do in BCI/SALTO.
+Phase 2 is represented as guarded dry-run autonomy: eligible second-order actions can route to `auto_execute`, but only after deterministic validation and action-plan guardrails pass.
 
 ## Setup
 
@@ -85,7 +89,9 @@ docker compose up -d
 PYTHONPATH=. python scripts/seed_db.py
 ```
 
-This creates all tables (`customers`, `pending_orders`, `installed_base_assets`, `audit_events`, `execution_log`, `human_reviews`) and populates them with 8 customers and realistic pending order scenarios.
+This creates BCI/SALTO simulation tables, including `bci_cases`, `bci_case_events`, `customers`, `customer_addresses`, `salto_orders`, `pending_orders`, `order_milestones`, `installed_base_assets`, `bundle_memberships`, `compatibility_matrix`, `action_catalog`, `audit_events`, `execution_log`, and `human_reviews`.
+
+Seed data is synthetic and covers CBU, EBU, PMIT Fix, PMIT Mobile, bundles, future-dated orders, device return, SIM exceptions, and PONR/final disconnect.
 
 To **reset** the database, simply re-run the seed script — it drops and recreates all tables.
 
@@ -111,7 +117,7 @@ Tests run fully offline using mocked DB and LLM layers.
 PYTHONPATH=. python scripts/run_demo_cases.py --continuous
 ```
 
-The demo runner uses curated structured tickets, real DB reads by default, and dry-run action handling by default. For a fully offline smoke demo:
+The demo runner uses curated BCI/SALTO stories, real DB reads by default, and dry-run action handling by default. It demonstrates both Phase 1 HITL recommendations and Phase 2 dry-run action plans. For a fully offline smoke demo:
 
 ```bash
 PYTHONPATH=. python scripts/run_demo_cases.py --source offline --continuous
@@ -120,7 +126,7 @@ PYTHONPATH=. python scripts/run_demo_cases.py --source offline --continuous
 To persist `auto_execute` / `human_review` records during a demo, pass:
 
 ```bash
-PYTHONPATH=. python scripts/run_demo_cases.py --write --persist-actions
+PYTHONPATH=. python scripts/run_demo_cases.py --persist-actions
 ```
 
 ### 9. Run golden evaluation
@@ -129,7 +135,7 @@ PYTHONPATH=. python scripts/run_demo_cases.py --write --persist-actions
 PYTHONPATH=. python scripts/evaluate_golden_cases.py --source offline
 ```
 
-The golden evaluator uses `tests/fixtures/golden_cases.json` and curated `TicketStructured` objects. It does not call live LLMs or require a database, so it is suitable for local regression checks and CI-style validation. Add `--json` for machine-readable output.
+The golden evaluator uses `tests/fixtures/golden_cases.json` and curated structured state. It does not call live LLMs or require a database, so it is suitable for local regression checks and CI-style validation. The current fixture has 34 BCI/SALTO scenarios and compares validation status, reason codes, recommendation, action-plan type, auto eligibility, guardrails, and HITL routing. Add `--json` for machine-readable output.
 
 ## Rule Knowledge Base
 
@@ -143,9 +149,14 @@ Current rule IDs include:
 - `installation.one_active_installation`
 - `core.future_dated_pending_order`
 - `exceptions.explicit_non_conflicting_exception`
+- `exceptions.salto_explicit_exception`
 - `scope.different_scope_allowed`
 - `bundle.bundle_member_pending`
 - `segment.cbu_vs_ebu_handling`
+- `segment.pmit_mobile_matrix`
+- `device_return.follow_on_allowed`
+- `activation.delivery_milestone`
+- `ponr.final_disconnect`
 
 ## LLM Model Roles
 
@@ -160,7 +171,7 @@ Environment-driven model roles:
 - `LLM_TIMEOUT_SECONDS`: request timeout for role-based LLM helpers
 - `ENABLE_LLM_TRACE`: enables lightweight trace metadata in graph state
 
-The triage node now records `llm_trace`, `confidence_summary`, and structured `errors` when extraction fails. If the LLM returns malformed output or times out, the graph receives a safe low-confidence `TicketStructured` object instead of crashing.
+The triage node extracts BCI-oriented fields such as `bci_case_id`, `intake_channel`, `ticket_type_raw`, `creator_role`, `customer_identifier`, `address_identifier`, `salto_order_reference`, `requested_action`, and evidence text. It still records `llm_trace`, `confidence_summary`, and structured `errors` when extraction fails. If the LLM returns malformed output or times out, the graph receives a safe low-confidence `TicketStructured` object instead of crashing.
 
 ## Human Review And Execution Guardrails
 
@@ -169,16 +180,19 @@ Automatic execution is protected by deterministic guardrails in `app/tools/execu
 - `ENABLE_AUTO_EXECUTE=true`
 - recommendation decision is `ALLOW_FOLLOW_ON`
 - `executable_action_possible=true`
+- `action_plan.auto_eligible=true`
+- `action_plan.action_type` is a supported dry-run action (`INTRODUCE_SECOND_ORDER_DRY_RUN` or `AMEND_ORDER_DRY_RUN`)
+- `action_plan.target_system=SALTO`
 - validation status is `ALLOW`
 - no validation missing info or blocking conditions exist
 - recommendation and validation confidence meet `AUTO_EXECUTE_MIN_CONFIDENCE`
 - no upstream state errors are present
 
-The `auto_execute` node re-checks the same guardrails defensively before writing execution records. Any failed guardrail routes to `human_review`, where `human_review_payload` includes validation status, reason codes, missing fields, and guardrail reasons for the operator.
+The `auto_execute` node re-checks the same guardrails defensively before writing execution records. It records simulated dry-run actions rather than calling real SALTO APIs. Any failed guardrail routes to `human_review`, where `human_review_payload` includes validation status, reason codes, action-plan fields, missing fields, and guardrail reasons for the operator.
 
 ## Auditability And Memory
 
-Graph state carries trace fields for `correlation_id`, `case_id`, optional `thread_id`, accumulated `audit_log`, and non-authoritative `memory_context`. Audit writes include node name, actor type, trace identifiers, payload summary, and timestamp. The audit writer still tolerates older call sites and falls back to the legacy DB insert shape if the local database has not been reseeded yet.
+Graph state carries trace fields for `correlation_id`, `case_id`, optional `thread_id`, accumulated `audit_log`, and non-authoritative `memory_context`. Audit writes include node name, actor type, trace identifiers, BCI/SALTO identifiers, action metadata, payload summary, and timestamp. The audit writer still tolerates older call sites and falls back to the legacy DB insert shape if the local database has not been reseeded yet.
 
 `app/tools/case_history.py` reads existing `audit_events`, `human_reviews`, and `execution_log` style data to expose prior cases, prior human review decisions, and recurring missing-info patterns. This memory is shown to recommendation/HITL payloads for operator context only; validation, recommendation decisions, guardrails, and routing remain deterministic.
 
@@ -186,8 +200,9 @@ Graph state carries trace fields for `correlation_id`, `case_id`, optional `thre
 
 - **LLM is used only for extraction** (triage) — all business decisions are deterministic Python rules in `validation.py`
 - **Rules are retrieved, not delegated**: the local knowledge base improves traceability and rationale, but validation code owns final decisions
-- **Auto-execution is guarded twice**: routing can choose the auto path, but `auto_execute.py` still re-checks deterministic guardrails
+- **Action planning separates Phase 1 and Phase 2**: recommendation tells the operator what to do; `ActionPlan` states whether guarded dry-run autonomy is possible
+- **Auto-execution is guarded twice**: routing can choose the auto path, but `auto_execute.py` still re-checks deterministic guardrails and only dry-runs eligible SALTO actions
 - **Audit trail and memory**: core nodes write enriched audit events and can surface lightweight historical context
 - **Golden evaluation**: stable offline fixtures exercise known allow/block/need-info scenarios without live LLMs
 - **Human-in-the-Loop**: `interrupt_before=["human_review"]` pauses the graph for operator approval
-- **Conditional routing**: only `ALLOW_FOLLOW_ON` triggers auto-execution; everything else requires human review
+- **Conditional routing**: only `ALLOW_FOLLOW_ON` with an eligible dry-run action plan triggers auto-execution; everything else requires human review

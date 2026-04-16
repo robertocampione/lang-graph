@@ -44,14 +44,19 @@ def _ticket(
     scope_type: str | None,
     scope_id: str | None = None,
     requested_follow_on_action: str | None = None,
+    requested_action: str | None = None,
+    address_id: str | None = None,
+    bci_case_id: str | None = None,
     product_family: str | None = None,
     missing_info: list[str] | None = None,
     ambiguities: list[str] | None = None,
     confidence_score: float = 0.95,
 ) -> TicketStructured:
     return TicketStructured(
+        bci_case_id=bci_case_id,
+        requested_action=requested_action,
         customer_id=customer_id,
-        address_id=None,
+        address_id=address_id,
         request_type=request_type,
         pending_order_type=pending_order_type,
         scope_type=scope_type,
@@ -70,17 +75,20 @@ DEMO_CASES = [
     # integration shows physical installation is still open.
     DemoCase(
         case_id="installation-delay-block",
-        title="Installation still pending blocks follow-on action",
-        scenario="Directive 06: HITL guardrail blocks auto-execution when installation_pending is true.",
+        title="BCI case: installation still pending blocks second order",
+        scenario="Phase 1 recommendation holds the BCI case because SALTO shows an active installation.",
         thread_id="demo-c-1001",
         ticket_raw="Customer C-1001 reports that the fiber installation is delayed and asks to proceed with a follow-on change.",
         ticket_structured=_ticket(
             customer_id="C-1001",
+            bci_case_id="BCI-9001",
             subject="Fiber installation delayed",
             request_type="modification",
             pending_order_type="provision",
             scope_type="fiber",
+            address_id="ADDR-1001-A",
             requested_follow_on_action="follow_on_change",
+            requested_action="introduce_second_order",
             product_family="Internet",
             missing_info=["address_id", "scope_id"],
             confidence_score=0.90,
@@ -93,8 +101,8 @@ DEMO_CASES = [
     # deterministic blocker and must route to human review.
     DemoCase(
         case_id="same-scope-block",
-        title="Same mobile scope blocks a second mobile modification",
-        scenario="Directive 06: same-scope deterministic block routes to human review.",
+        title="BCI case: same mobile scope blocks modification",
+        scenario="CBU same-scope SALTO blocker routes to human review.",
         thread_id="demo-c-1002",
         ticket_raw="Customer C-1002 wants a mobile subscription modification while the mobile order is still pending.",
         ticket_structured=_ticket(
@@ -104,6 +112,8 @@ DEMO_CASES = [
             pending_order_type="modification",
             scope_type="mobile",
             scope_id="MOB-888",
+            address_id="ADDR-1002-A",
+            requested_action="modify_mobile_subscription",
             product_family="Mobile",
         ),
     ),
@@ -111,8 +121,8 @@ DEMO_CASES = [
     # and should pass auto-execution guardrails.
     DemoCase(
         case_id="different-scope-allow",
-        title="Different scope allows automated follow-on",
-        scenario="Directive 06: allowed recommendation passes execution guardrails and routes to auto_execute.",
+        title="BCI case: different scope allows dry-run second order",
+        scenario="Phase 2 dry-run is eligible because the fiber request is independent from the pending mobile order.",
         thread_id="demo-c-1002",
         ticket_raw="Customer C-1002 asks for a fiber information update while the current pending order is mobile.",
         ticket_structured=_ticket(
@@ -121,6 +131,8 @@ DEMO_CASES = [
             request_type="status_update",
             pending_order_type="modification",
             scope_type="fiber",
+            address_id="ADDR-1002-A",
+            requested_action="introduce_second_order",
             product_family="Internet",
         ),
         iterations=[
@@ -131,8 +143,8 @@ DEMO_CASES = [
     # Future-dated pending order must not execute automatically.
     DemoCase(
         case_id="future-dated-block",
-        title="Future-dated order blocks automated changes",
-        scenario="Directive 06: future-dated pending order is blocked and requires HITL.",
+        title="BCI case: future-dated SALTO order blocks action",
+        scenario="SALTO future-dated work is pending immediately and blocks automation.",
         thread_id="demo-c-1005",
         ticket_raw="Customer C-1005 asks to change the TV cancellation before the planned future execution date.",
         ticket_structured=_ticket(
@@ -142,15 +154,76 @@ DEMO_CASES = [
             pending_order_type="cancellation",
             scope_type="tv",
             scope_id="TV-999",
+            address_id="ADDR-1005-A",
+            requested_action="change_cancellation",
             product_family="TV",
         ),
     ),
     # Scenario: directive 05 missing-info path plus directive 06 guardrails.
     # Missing customer id must request info and never auto-execute.
     DemoCase(
+        case_id="pmit-mobile-matrix-allow",
+        title="BCI case: PMIT Mobile matrix allows roaming option",
+        scenario="PMIT Mobile uses a cross-order matrix instead of default same-scope blocking.",
+        thread_id="demo-c-1008",
+        ticket_raw="BCI-9004 Customer C-1008 asks to add roaming option during the PMIT mobile activation.",
+        ticket_structured=_ticket(
+            customer_id="C-1008",
+            bci_case_id="BCI-9004",
+            subject="PMIT roaming option",
+            request_type="modification",
+            pending_order_type="provision",
+            scope_type="mobile",
+            scope_id="MOB-555",
+            address_id="ADDR-1008-A",
+            requested_follow_on_action="add_roaming_option",
+            requested_action="add_roaming_option",
+            product_family="Mobile",
+        ),
+    ),
+    DemoCase(
+        case_id="bundle-member-block",
+        title="BCI case: pending pack blocks member TV change",
+        scenario="SALTO pack parent order blocks changes to dependent bundle members.",
+        thread_id="demo-c-1007",
+        ticket_raw="BCI-9003 Customer C-1007 wants to remove TV-777 from a pack while bundle order PO-1007 is open.",
+        ticket_structured=_ticket(
+            customer_id="C-1007",
+            bci_case_id="BCI-9003",
+            subject="Remove pack TV",
+            request_type="modification",
+            pending_order_type="bundle",
+            scope_type="tv",
+            scope_id="TV-777",
+            address_id="ADDR-1007-A",
+            requested_follow_on_action="remove_tv_option",
+            requested_action="remove_tv_option",
+            product_family="TV",
+        ),
+    ),
+    DemoCase(
+        case_id="device-return-allow",
+        title="BCI case: only device return remains",
+        scenario="SALTO cease execution is done; only device return is pending, so dry-run second order can proceed.",
+        thread_id="demo-c-1009",
+        ticket_raw="Customer C-1009 only has device return pending and asks for a second order.",
+        ticket_structured=_ticket(
+            customer_id="C-1009",
+            subject="Device return only",
+            request_type="device_return",
+            pending_order_type="cease",
+            scope_type="device",
+            scope_id="DEV-1009",
+            address_id="ADDR-1009-A",
+            requested_follow_on_action="device_return",
+            requested_action="device_return",
+            product_family="Device",
+        ),
+    ),
+    DemoCase(
         case_id="missing-customer-info",
-        title="Missing customer identifier requests more information",
-        scenario="Directive 05/06: missing customer_id produces REQUEST_INFO and human review.",
+        title="BCI case: missing customer identifier requests more information",
+        scenario="Poor intake quality produces REQUEST_INFO and keeps the case HITL.",
         thread_id="demo-missing-customer",
         ticket_raw="The customer asks for an update on the pending order but did not provide any customer identifier.",
         ticket_structured=_ticket(
@@ -167,9 +240,12 @@ DEMO_CASES = [
 
 
 OFFLINE_CUSTOMERS = {
-    "C-1001": CustomerContext(name="Acme Corp", tier="gold", open_orders=3, oldest_pending_days=12, source="offline_fixture"),
-    "C-1002": CustomerContext(name="Globex Inc", tier="silver", open_orders=1, oldest_pending_days=2, source="offline_fixture"),
-    "C-1005": CustomerContext(name="Cyberdyne Systems", tier="gold", open_orders=2, oldest_pending_days=5, source="offline_fixture"),
+    "C-1001": CustomerContext(name="Synthetic Fiber Home", tier="gold", segment="CBU", open_orders=3, oldest_pending_days=12, source="offline_fixture"),
+    "C-1002": CustomerContext(name="Synthetic Mobile Customer", tier="silver", segment="CBU", open_orders=1, oldest_pending_days=2, source="offline_fixture"),
+    "C-1005": CustomerContext(name="Synthetic Future TV", tier="gold", segment="CBU", open_orders=2, oldest_pending_days=5, source="offline_fixture"),
+    "C-1007": CustomerContext(name="Synthetic Bundle Family", tier="standard", segment="CBU", open_orders=1, oldest_pending_days=1, source="offline_fixture"),
+    "C-1008": CustomerContext(name="Synthetic PMIT Mobile", tier="silver", segment="PMIT_MOBILE", open_orders=2, oldest_pending_days=10, source="offline_fixture"),
+    "C-1009": CustomerContext(name="Synthetic Device Return", tier="standard", segment="CBU", open_orders=1, oldest_pending_days=18, source="offline_fixture"),
 }
 
 OFFLINE_ORDERS = {
@@ -179,6 +255,7 @@ OFFLINE_ORDERS = {
         order_status="in_progress",
         scope_type="fiber",
         scope_id="FIB-555",
+        address_id="ADDR-1001-A",
         planned_execution_date="2026-05-01",
         installation_pending=True,
         oldest_pending_days=12,
@@ -190,6 +267,7 @@ OFFLINE_ORDERS = {
         order_status="on_hold",
         scope_type="mobile",
         scope_id="MOB-888",
+        address_id="ADDR-1002-A",
         planned_execution_date="2026-04-20",
         installation_pending=False,
         oldest_pending_days=2,
@@ -201,10 +279,51 @@ OFFLINE_ORDERS = {
         order_status="open",
         scope_type="tv",
         scope_id="TV-999",
-        planned_execution_date="2027-01-01",
+        address_id="ADDR-1005-A",
+        planned_execution_date="2026-07-01",
         installation_pending=False,
         oldest_pending_days=5,
         exception_markers=["future_dated"],
+    ),
+    "C-1007": PendingOrderContext(
+        pending_order_id="PO-1007",
+        order_type="bundle",
+        order_status="in_progress",
+        scope_type="bundle",
+        scope_id="BUN-777",
+        address_id="ADDR-1007-A",
+        bundle_id="BUN-777",
+        planned_execution_date="2026-06-01",
+        installation_pending=False,
+        oldest_pending_days=1,
+        exception_markers=[],
+    ),
+    "C-1008": PendingOrderContext(
+        pending_order_id="PO-1008",
+        order_type="provision",
+        order_status="in_progress",
+        scope_type="mobile",
+        scope_id="MOB-555",
+        address_id="ADDR-1008-A",
+        planned_execution_date="2026-04-18",
+        installation_pending=False,
+        oldest_pending_days=10,
+        exception_markers=["pmit_sync"],
+    ),
+    "C-1009": PendingOrderContext(
+        pending_order_id="PO-1009",
+        order_type="cease",
+        order_status="return_pending",
+        scope_type="device",
+        scope_id="DEV-1009",
+        address_id="ADDR-1009-A",
+        planned_execution_date="2026-03-20",
+        installation_pending=False,
+        oldest_pending_days=18,
+        exception_markers=["device_return_only"],
+        device_return_pending=True,
+        device_return_days=18,
+        ponr_reached=True,
     ),
 }
 
@@ -244,12 +363,32 @@ def _offline_integration(state: dict[str, Any]) -> dict[str, Any]:
     )
     order = OFFLINE_ORDERS.get(customer_id)
     assets = OFFLINE_ASSETS.get(customer_id, [])
+    compatibility_decision = None
+    if customer_id == "C-1008" and getattr(ticket, "requested_action", None) == "add_roaming_option":
+        compatibility_decision = {
+            "segment": "PMIT_MOBILE",
+            "pending_order_type": "provision",
+            "follow_on_action": "add_roaming_option",
+            "decision": "ACCEPT",
+            "reason": "PMIT Mobile matrix allows roaming option.",
+        }
+    bundle_context = None
+    if customer_id == "C-1007":
+        bundle_context = {
+            "bundle_id": "BUN-777",
+            "customer_id": "C-1007",
+            "address_id": "ADDR-1007-A",
+            "member_scope_ids": ["FIB-777", "TV-777"],
+            "member_asset_ids": ["AST-777-I", "AST-777-TV"],
+        }
     order_id = order.pending_order_id if order else "None"
     return {
         "messages": [f"[integration:offline] Context loaded. Customer: {customer.name} ({customer_id or 'n/a'}). Pending Orders: {order_id}. Installed Base size: {len(assets)}."],
         "customer_context": customer,
         "pending_order_context": order,
         "installed_base_context": assets,
+        "compatibility_decision": compatibility_decision,
+        "bundle_context": bundle_context,
         "memory_context": {
             "case_id": state.get("case_id") or customer_id,
             "correlation_id": state.get("correlation_id") or state.get("case_id") or customer_id,
@@ -312,9 +451,11 @@ def _run_pipeline(case: DemoCase, *, source: str, persist_actions: bool, prior_m
         if persist_actions:
             state = _merge(state, auto_execute(state))
         else:
+            action_plan = state.get("action_plan")
             state["execution_result"] = json.dumps({
                 "status": "dry_run",
-                "action_taken": state["recommendation"].decision,
+                "action_taken": getattr(action_plan, "action_type", state["recommendation"].decision),
+                "target_system": getattr(action_plan, "target_system", "SALTO"),
                 "detail": "Auto-execution was skipped because --persist-actions was not set.",
             })
     else:
@@ -329,6 +470,7 @@ def _run_pipeline(case: DemoCase, *, source: str, persist_actions: bool, prior_m
 def _print_case_result(case: DemoCase, state: dict[str, Any], *, iteration: int, prior_message_count: int) -> None:
     validation_result: ValidationResult = state["validation_result"]
     rec: Recommendation = state["recommendation"]
+    action_plan = state.get("action_plan")
     retrieved = state.get("retrieved_rules", {})
     pending_order = state.get("pending_order_context")
     guardrails = state.get("execution_guardrails")
@@ -348,6 +490,8 @@ def _print_case_result(case: DemoCase, state: dict[str, Any], *, iteration: int,
     print(f"Applied rules: {', '.join(validation_result.rules_used) or 'none'}")
     print(f"Missing fields: {', '.join(validation_result.missing_info) or 'none'}")
     print(f"Recommendation: {rec.decision} | executable={rec.executable_action_possible}")
+    if action_plan:
+        print(f"Action plan: {action_plan.action_type} on {action_plan.target_system} | auto_eligible={action_plan.auto_eligible}")
     print(f"Execution guardrails: {', '.join(guardrails.reasons) if guardrails else 'not evaluated'}")
     print(f"Route: {state.get('route')}")
     print(f"Human/action result: {state.get('human_review') or state.get('execution_result') or 'none'}")
@@ -366,6 +510,7 @@ def _as_json_summary(case: DemoCase, state: dict[str, Any], *, iteration: int, p
         "retrieved_rule_ids": state.get("retrieved_rules", {}).get("matched_rule_ids", []),
         "validation_result": _model_dump(state.get("validation_result")),
         "recommendation": _model_dump(state.get("recommendation")),
+        "action_plan": _model_dump(state.get("action_plan")),
         "execution_guardrails": _model_dump(state.get("execution_guardrails")),
         "memory_context": _model_dump(state.get("memory_context")),
         "route": state.get("route"),

@@ -36,6 +36,18 @@ def build_audit_entry(
 ) -> dict[str, Any]:
     """Build the audit payload shared by DB persistence and tests."""
     correlation_id, case_id, thread_id = _state_ids(state)
+    payload_summary = dict(payload or {})
+    if state:
+        ticket = state.get("ticket_structured")
+        bci_case = state.get("bci_case_context")
+        order = state.get("selected_salto_order") or state.get("pending_order_context")
+        action_plan = state.get("action_plan")
+        payload_summary.setdefault("bci_case_id", _get_value(bci_case, "bci_case_id") or _get_value(ticket, "bci_case_id"))
+        payload_summary.setdefault("customer_id", _get_value(ticket, "customer_id") or _get_value(bci_case, "customer_id"))
+        payload_summary.setdefault("salto_order_id", _get_value(order, "salto_order_id") or _get_value(order, "pending_order_id"))
+        payload_summary.setdefault("actor_role", _get_value(ticket, "creator_role"))
+        payload_summary.setdefault("target_system", _get_value(action_plan, "target_system"))
+        payload_summary.setdefault("action_type", _get_value(action_plan, "action_type"))
     return {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "node_name": node_name,
@@ -44,7 +56,7 @@ def build_audit_entry(
         "case_id": case_id,
         "thread_id": thread_id,
         "summary": summary,
-        "payload_summary": payload or {},
+        "payload_summary": payload_summary,
     }
 
 

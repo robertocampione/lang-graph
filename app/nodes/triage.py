@@ -19,6 +19,8 @@ SCOPE_KEYWORDS = {
 }
 
 CUSTOMER_ID_PATTERN = re.compile(r"\bC-\d{4,}\b", re.IGNORECASE)
+BCI_CASE_PATTERN = re.compile(r"\bBCI-\d{4,}\b", re.IGNORECASE)
+SALTO_ORDER_PATTERN = re.compile(r"\bPO-\d{4,}\b", re.IGNORECASE)
 
 
 def _safe_ticket(
@@ -28,6 +30,15 @@ def _safe_ticket(
     ambiguities: list[str],
     confidence_score: float,
     customer_id: str | None = None,
+    bci_case_id: str | None = None,
+    intake_channel: str | None = None,
+    ticket_type_raw: str | None = None,
+    creator_role: str | None = None,
+    customer_identifier: str | None = None,
+    address_identifier: str | None = None,
+    salto_order_reference: str | None = None,
+    requested_action: str | None = None,
+    evidence_text: str | None = None,
     address_id: str | None = None,
     request_type: str | None = None,
     pending_order_type: str | None = None,
@@ -37,6 +48,15 @@ def _safe_ticket(
     product_family: str | None = None,
 ) -> TicketStructured:
     return TicketStructured(
+        bci_case_id=bci_case_id,
+        intake_channel=intake_channel,
+        ticket_type_raw=ticket_type_raw,
+        creator_role=creator_role,
+        customer_identifier=customer_identifier,
+        address_identifier=address_identifier,
+        salto_order_reference=salto_order_reference,
+        requested_action=requested_action,
+        evidence_text=evidence_text,
         customer_id=customer_id,
         address_id=address_id,
         request_type=request_type,
@@ -91,6 +111,16 @@ def _fallback_customer_id(raw: str) -> str | None:
     return match.group(0).upper() if match else None
 
 
+def _fallback_bci_case_id(raw: str) -> str | None:
+    match = BCI_CASE_PATTERN.search(raw)
+    return match.group(0).upper() if match else None
+
+
+def _fallback_salto_order_reference(raw: str) -> str | None:
+    match = SALTO_ORDER_PATTERN.search(raw)
+    return match.group(0).upper() if match else None
+
+
 def _post_process_ticket(ticket: TicketStructured, raw: str, issues: list[str]) -> TicketStructured:
     missing_info = _normalized_list(ticket.missing_info)
     ambiguities = _normalized_list(ticket.ambiguities)
@@ -99,7 +129,20 @@ def _post_process_ticket(ticket: TicketStructured, raw: str, issues: list[str]) 
         fallback_id = _fallback_customer_id(raw)
         if fallback_id:
             ticket.customer_id = fallback_id
+            ticket.customer_identifier = ticket.customer_identifier or fallback_id
             issues.append("customer_id_recovered_by_regex")
+
+    if not ticket.bci_case_id:
+        fallback_case_id = _fallback_bci_case_id(raw)
+        if fallback_case_id:
+            ticket.bci_case_id = fallback_case_id
+            issues.append("bci_case_id_recovered_by_regex")
+
+    if not ticket.salto_order_reference:
+        fallback_order_ref = _fallback_salto_order_reference(raw)
+        if fallback_order_ref:
+            ticket.salto_order_reference = fallback_order_ref
+            issues.append("salto_order_reference_recovered_by_regex")
 
     if ticket.customer_id:
         missing_info = [field for field in missing_info if field != "customer_id"]
@@ -200,8 +243,11 @@ def triage(state: GraphState) -> dict:
         ("system",
          "You are a telecom pending-order triage extractor. Your only job is structured extraction.\n"
          "Do not make business decisions, do not approve actions, and do not invent identifiers.\n"
+         "Extract BCI intake fields when present: bci_case_id, intake_channel, ticket_type_raw, creator_role, customer_identifier, address_identifier, salto_order_reference, requested_action, evidence_text.\n"
          "Expected customer_id format: C-1001. Expected scope_type examples: fiber, mobile, tv, billing.\n"
+         "Expected bci_case_id format: BCI-9001. Expected SALTO order reference format: PO-1001.\n"
          "Expected request_type examples: status_update, modification, cancellation, device_return, sim_swap.\n"
+         "Expected requested_action examples: introduce_second_order, add_roaming_option, sim_swap, device_return, modify_mobile_subscription, remove_tv_option.\n"
          "Expected pending_order_type examples: provision, move, modification, cancellation.\n"
          "Use null for unknown optional fields. If a required identifier is absent, add its field name to missing_info.\n"
          "Always add customer_id to missing_info when no customer ID is present.\n"
@@ -225,6 +271,8 @@ def triage(state: GraphState) -> dict:
             success = False
             result = _safe_ticket(
                 customer_id=_fallback_customer_id(raw),
+                bci_case_id=_fallback_bci_case_id(raw),
+                salto_order_reference=_fallback_salto_order_reference(raw),
                 subject="Extraction failed",
                 missing_info=["customer_id", "extraction_failed"],
                 ambiguities=["Malformed structured extraction"],
@@ -236,6 +284,8 @@ def triage(state: GraphState) -> dict:
         issues.append(type(e).__name__)
         result = _safe_ticket(
             customer_id=_fallback_customer_id(raw),
+            bci_case_id=_fallback_bci_case_id(raw),
+            salto_order_reference=_fallback_salto_order_reference(raw),
             subject="Extraction failed",
             missing_info=["customer_id", "extraction_failed"],
             ambiguities=["LLM extraction failed"],
@@ -255,7 +305,7 @@ def triage(state: GraphState) -> dict:
         state=audit_state,
         payload={"confidence": result.confidence_score, "issues": issues},
     )
-    case_id = state.get("case_id") or result.customer_id
+    case_id = state.get("case_id") or result.bci_case_id or result.customer_id
     correlation_id = state.get("correlation_id") or case_id
 
     return {
