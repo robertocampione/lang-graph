@@ -1,0 +1,348 @@
+[
+  {
+    "case_id": "installation-delay-block",
+    "iteration": 1,
+    "thread_id": "demo-c-1001",
+    "prior_message_count": 0,
+    "ticket_raw": "Customer C-1001 reports that the fiber installation is delayed and asks to proceed with a follow-on change.",
+    "pending_order_context": {
+      "pending_order_id": "PO-1001",
+      "order_type": "provision",
+      "order_status": "in_progress",
+      "scope_type": "fiber",
+      "scope_id": "FIB-555",
+      "planned_execution_date": "2026-05-01",
+      "installation_pending": true,
+      "oldest_pending_days": 12,
+      "exception_markers": [
+        "delay_reported"
+      ]
+    },
+    "retrieved_rule_ids": [
+      "scope.different_scope_allowed",
+      "installation.one_active_installation",
+      "core.same_scope_pending",
+      "core.required_fields",
+      "core.future_dated_pending_order"
+    ],
+    "validation_result": {
+      "status": "BLOCK",
+      "reason_codes": [
+        "INSTALLATION_STILL_PENDING"
+      ],
+      "blocking_conditions": [
+        "The current pending order has an active physical installation that is not yet completed."
+      ],
+      "missing_info": [],
+      "rules_used": [
+        "installation.one_active_installation"
+      ],
+      "confidence": 1.0
+    },
+    "recommendation": {
+      "decision": "HOLD_CASE",
+      "rationale": "Validation Status: BLOCK\nReasons: INSTALLATION_STILL_PENDING\nDetails:\n - The current pending order has an active physical installation that is not yet completed.",
+      "suggested_human_action": "Review the blocking conditions and check with the backoffice team if an exception can be made.",
+      "missing_fields": [],
+      "executable_action_possible": false,
+      "confidence": 1.0
+    },
+    "route": "human_review",
+    "human_review": "Dry-run review required: HOLD_CASE",
+    "execution_result": null
+  },
+  {
+    "case_id": "installation-delay-block",
+    "iteration": 2,
+    "thread_id": "demo-c-1001",
+    "prior_message_count": 4,
+    "ticket_raw": "Follow-up note: customer called again and asks whether backoffice can approve an exception.",
+    "pending_order_context": {
+      "pending_order_id": "PO-1001",
+      "order_type": "provision",
+      "order_status": "in_progress",
+      "scope_type": "fiber",
+      "scope_id": "FIB-555",
+      "planned_execution_date": "2026-05-01",
+      "installation_pending": true,
+      "oldest_pending_days": 12,
+      "exception_markers": [
+        "delay_reported"
+      ]
+    },
+    "retrieved_rule_ids": [
+      "exceptions.explicit_non_conflicting_exception",
+      "installation.one_active_installation",
+      "core.same_scope_pending",
+      "scope.different_scope_allowed",
+      "core.required_fields"
+    ],
+    "validation_result": {
+      "status": "BLOCK",
+      "reason_codes": [
+        "INSTALLATION_STILL_PENDING"
+      ],
+      "blocking_conditions": [
+        "The current pending order has an active physical installation that is not yet completed."
+      ],
+      "missing_info": [],
+      "rules_used": [
+        "installation.one_active_installation"
+      ],
+      "confidence": 1.0
+    },
+    "recommendation": {
+      "decision": "HOLD_CASE",
+      "rationale": "Validation Status: BLOCK\nReasons: INSTALLATION_STILL_PENDING\nDetails:\n - The current pending order has an active physical installation that is not yet completed.",
+      "suggested_human_action": "Review the blocking conditions and check with the backoffice team if an exception can be made.",
+      "missing_fields": [],
+      "executable_action_possible": false,
+      "confidence": 1.0
+    },
+    "route": "human_review",
+    "human_review": "Dry-run review required: HOLD_CASE",
+    "execution_result": null
+  },
+  {
+    "case_id": "same-scope-block",
+    "iteration": 1,
+    "thread_id": "demo-c-1002",
+    "prior_message_count": 0,
+    "ticket_raw": "Customer C-1002 wants a mobile subscription modification while the mobile order is still pending.",
+    "pending_order_context": {
+      "pending_order_id": "PO-1002",
+      "order_type": "modification",
+      "order_status": "on_hold",
+      "scope_type": "mobile",
+      "scope_id": "MOB-888",
+      "planned_execution_date": "2026-04-20",
+      "installation_pending": false,
+      "oldest_pending_days": 2,
+      "exception_markers": []
+    },
+    "retrieved_rule_ids": [
+      "core.same_scope_pending",
+      "bundle.bundle_member_pending",
+      "core.required_fields",
+      "installation.one_active_installation",
+      "segment.cbu_vs_ebu_handling"
+    ],
+    "validation_result": {
+      "status": "BLOCK",
+      "reason_codes": [
+        "SAME_SCOPE_PENDING"
+      ],
+      "blocking_conditions": [
+        "An order is already pending on the same scope type (mobile)."
+      ],
+      "missing_info": [],
+      "rules_used": [
+        "core.same_scope_pending"
+      ],
+      "confidence": 1.0
+    },
+    "recommendation": {
+      "decision": "HOLD_CASE",
+      "rationale": "Validation Status: BLOCK\nReasons: SAME_SCOPE_PENDING\nDetails:\n - An order is already pending on the same scope type (mobile).",
+      "suggested_human_action": "Review the blocking conditions and check with the backoffice team if an exception can be made.",
+      "missing_fields": [],
+      "executable_action_possible": false,
+      "confidence": 1.0
+    },
+    "route": "human_review",
+    "human_review": "Dry-run review required: HOLD_CASE",
+    "execution_result": null
+  },
+  {
+    "case_id": "different-scope-allow",
+    "iteration": 1,
+    "thread_id": "demo-c-1002",
+    "prior_message_count": 4,
+    "ticket_raw": "Customer C-1002 asks for a fiber information update while the current pending order is mobile.",
+    "pending_order_context": {
+      "pending_order_id": "PO-1002",
+      "order_type": "modification",
+      "order_status": "on_hold",
+      "scope_type": "mobile",
+      "scope_id": "MOB-888",
+      "planned_execution_date": "2026-04-20",
+      "installation_pending": false,
+      "oldest_pending_days": 2,
+      "exception_markers": []
+    },
+    "retrieved_rule_ids": [
+      "core.same_scope_pending",
+      "segment.cbu_vs_ebu_handling",
+      "scope.different_scope_allowed",
+      "bundle.bundle_member_pending",
+      "core.required_fields"
+    ],
+    "validation_result": {
+      "status": "ALLOW",
+      "reason_codes": [
+        "NO_CONFLICTS"
+      ],
+      "blocking_conditions": [],
+      "missing_info": [],
+      "rules_used": [
+        "scope.different_scope_allowed"
+      ],
+      "confidence": 1.0
+    },
+    "recommendation": {
+      "decision": "ALLOW_FOLLOW_ON",
+      "rationale": "Validation Status: ALLOW\nReasons: NO_CONFLICTS",
+      "suggested_human_action": "Approve the follow-on request. Auto-execution may proceed.",
+      "missing_fields": [],
+      "executable_action_possible": true,
+      "confidence": 1.0
+    },
+    "route": "auto_execute",
+    "human_review": null,
+    "execution_result": "{\"status\": \"dry_run\", \"action_taken\": \"ALLOW_FOLLOW_ON\", \"detail\": \"Auto-execution was skipped because --persist-actions was not set.\"}"
+  },
+  {
+    "case_id": "different-scope-allow",
+    "iteration": 2,
+    "thread_id": "demo-c-1002",
+    "prior_message_count": 8,
+    "ticket_raw": "Follow-up note: operator confirms the request is informational and not tied to the mobile order.",
+    "pending_order_context": {
+      "pending_order_id": "PO-1002",
+      "order_type": "modification",
+      "order_status": "on_hold",
+      "scope_type": "mobile",
+      "scope_id": "MOB-888",
+      "planned_execution_date": "2026-04-20",
+      "installation_pending": false,
+      "oldest_pending_days": 2,
+      "exception_markers": []
+    },
+    "retrieved_rule_ids": [
+      "core.same_scope_pending",
+      "bundle.bundle_member_pending",
+      "scope.different_scope_allowed",
+      "exceptions.explicit_non_conflicting_exception",
+      "core.future_dated_pending_order"
+    ],
+    "validation_result": {
+      "status": "ALLOW",
+      "reason_codes": [
+        "NO_CONFLICTS"
+      ],
+      "blocking_conditions": [],
+      "missing_info": [],
+      "rules_used": [
+        "scope.different_scope_allowed"
+      ],
+      "confidence": 1.0
+    },
+    "recommendation": {
+      "decision": "ALLOW_FOLLOW_ON",
+      "rationale": "Validation Status: ALLOW\nReasons: NO_CONFLICTS",
+      "suggested_human_action": "Approve the follow-on request. Auto-execution may proceed.",
+      "missing_fields": [],
+      "executable_action_possible": true,
+      "confidence": 1.0
+    },
+    "route": "auto_execute",
+    "human_review": null,
+    "execution_result": "{\"status\": \"dry_run\", \"action_taken\": \"ALLOW_FOLLOW_ON\", \"detail\": \"Auto-execution was skipped because --persist-actions was not set.\"}"
+  },
+  {
+    "case_id": "future-dated-block",
+    "iteration": 1,
+    "thread_id": "demo-c-1005",
+    "prior_message_count": 0,
+    "ticket_raw": "Customer C-1005 asks to change the TV cancellation before the planned future execution date.",
+    "pending_order_context": {
+      "pending_order_id": "PO-1005",
+      "order_type": "cancellation",
+      "order_status": "open",
+      "scope_type": "tv",
+      "scope_id": "TV-999",
+      "planned_execution_date": "2027-01-01",
+      "installation_pending": false,
+      "oldest_pending_days": 5,
+      "exception_markers": [
+        "future_dated"
+      ]
+    },
+    "retrieved_rule_ids": [
+      "core.future_dated_pending_order",
+      "scope.different_scope_allowed",
+      "core.required_fields",
+      "installation.one_active_installation",
+      "core.same_scope_pending"
+    ],
+    "validation_result": {
+      "status": "BLOCK",
+      "reason_codes": [
+        "FUTURE_DATED_ORDER"
+      ],
+      "blocking_conditions": [
+        "The current pending order is future-dated and must not be changed automatically."
+      ],
+      "missing_info": [],
+      "rules_used": [
+        "core.future_dated_pending_order"
+      ],
+      "confidence": 1.0
+    },
+    "recommendation": {
+      "decision": "HOLD_CASE",
+      "rationale": "Validation Status: BLOCK\nReasons: FUTURE_DATED_ORDER\nDetails:\n - The current pending order is future-dated and must not be changed automatically.",
+      "suggested_human_action": "Review the blocking conditions and check with the backoffice team if an exception can be made.",
+      "missing_fields": [],
+      "executable_action_possible": false,
+      "confidence": 1.0
+    },
+    "route": "human_review",
+    "human_review": "Dry-run review required: HOLD_CASE",
+    "execution_result": null
+  },
+  {
+    "case_id": "missing-customer-info",
+    "iteration": 1,
+    "thread_id": "demo-missing-customer",
+    "prior_message_count": 0,
+    "ticket_raw": "The customer asks for an update on the pending order but did not provide any customer identifier.",
+    "pending_order_context": null,
+    "retrieved_rule_ids": [
+      "core.required_fields",
+      "installation.one_active_installation",
+      "exceptions.explicit_non_conflicting_exception",
+      "core.same_scope_pending",
+      "bundle.bundle_member_pending"
+    ],
+    "validation_result": {
+      "status": "NEED_INFO",
+      "reason_codes": [
+        "MISSING_DATA"
+      ],
+      "blocking_conditions": [
+        "Cannot process ticket due to missing fields: customer_id"
+      ],
+      "missing_info": [
+        "customer_id"
+      ],
+      "rules_used": [
+        "core.required_fields"
+      ],
+      "confidence": 1.0
+    },
+    "recommendation": {
+      "decision": "REQUEST_INFO",
+      "rationale": "Validation Status: NEED_INFO\nReasons: MISSING_DATA\nDetails:\n - Cannot process ticket due to missing fields: customer_id",
+      "suggested_human_action": "Contact customer to request missing information: customer_id.",
+      "missing_fields": [
+        "customer_id"
+      ],
+      "executable_action_possible": false,
+      "confidence": 1.0
+    },
+    "route": "human_review",
+    "human_review": "Dry-run review required: REQUEST_INFO",
+    "execution_result": null
+  }
+]

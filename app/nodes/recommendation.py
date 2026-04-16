@@ -1,40 +1,72 @@
-from langchain_core.prompts import ChatPromptTemplate
 from app.state.schema import GraphState, Recommendation
-from app.config.llm import default_llm
+from app.tools.audit import write_audit_event
+import logging
+
+logger = logging.getLogger(__name__)
 
 def recommendation(state: GraphState) -> dict:
     """
-    Produce an action recommendation using LLM reasoning over gathered context.
+    Produce a human-readable recommendation format based purely on the deterministic ValidationResult.
+    The LLM is no longer making autonomous business decisions here.
     """
-    structured: dict | getattr = state.get("ticket_structured")
-    context: dict | getattr = state.get("customer_context")
-    rules: dict = state.get("retrieved_rules", {})
-    
-    # We might get Pydantic models directly due to TypedDict/Pydantic usage, so handle dict/model gracefully
-    ticket_dict = structured.model_dump() if hasattr(structured, 'model_dump') else structured
-    context_dict = context.model_dump() if hasattr(context, 'model_dump') else context
+    validation_result = state.get("validation_result")
 
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", "You are an expert customer service orchestrator. Analyze the incoming ticket, the customer context, and the Company Shipping Policies.\n"
-                   "Company Shipping Policies:\n{policy_data}\n\n"
-                   "Decision Logic:\n"
-                   "1. If missing_info is not empty, action MUST be 'REQUEST_INFO'.\n"
-                   "2. Evaluate open orders and pending days against the Policy. If it violates boundaries, action MUST be 'ESCALE' or 'HOLD_CASE'.\n"
-                   "3. Otherwise, action is 'ALLOW_FOLLOW_ON'.\n"
-                   "Provide the action and the detailed reasoning for your choice."),
-        ("human", "Ticket Data: {ticket_data}\n\nCustomer Context: {context_data}")
-    ])
+    if not validation_result:
+        # Fallback if validation somehow didn't run
+        return {
+            "messages": ["[recommendation] ERROR: No ValidationResult found in state."],
+            "recommendation": Recommendation(
+                decision="ERROR",
+                rationale="Validation node did not produce a result.",
+                suggested_human_action="Review system logs.",
+                missing_fields=[],
+                executable_action_possible=False,
+                confidence=0.0
+            )
+        }
 
-    structured_llm = default_llm.with_structured_output(Recommendation)
-    chain = prompt | structured_llm
+    status = validation_result.status
 
-    result: Recommendation = chain.invoke({
-        "ticket_data": ticket_dict,
-        "context_data": context_dict,
-        "policy_data": rules
-    })
+    # Map validation status to recommendation decision
+    if status == "NEED_INFO":
+        decision = "REQUEST_INFO"
+        suggested_action = f"Contact customer to request missing information: {', '.join(validation_result.missing_info)}."
+        executable = False
+    elif status == "BLOCK":
+        decision = "HOLD_CASE"
+        suggested_action = "Review the blocking conditions and check with the backoffice team if an exception can be made."
+        executable = False
+    elif status == "ESCALATE":
+        decision = "ESCALATE"
+        suggested_action = "Escalate immediately to 2nd Line Support per SLA policies."
+        executable = False
+    elif status == "ALLOW":
+        decision = "ALLOW_FOLLOW_ON"
+        suggested_action = "Approve the follow-on request. Auto-execution may proceed."
+        executable = True
+    else:
+        decision = "UNKNOWN"
+        suggested_action = "Manual review required due to unknown validation status."
+        executable = False
+
+    rationale = f"Validation Status: {status}\n"
+    if validation_result.reason_codes:
+        rationale += f"Reasons: {', '.join(validation_result.reason_codes)}\n"
+    if validation_result.blocking_conditions:
+        rationale += "Details:\n - " + "\n - ".join(validation_result.blocking_conditions)
+
+    rec = Recommendation(
+        decision=decision,
+        rationale=rationale.strip(),
+        suggested_human_action=suggested_action,
+        missing_fields=list(validation_result.missing_info),
+        executable_action_possible=executable,
+        confidence=validation_result.confidence
+    )
+
+    write_audit_event("recommendation", f"Decision: {rec.decision}. Executable: {rec.executable_action_possible}")
 
     return {
-        "messages": [f"[recommendation] {result.action} — {result.reason}"],
-        "recommendation": result,
+        "messages": [f"[recommendation] Generated decision: {rec.decision} (Executable: {rec.executable_action_possible})"],
+        "recommendation": rec
     }
