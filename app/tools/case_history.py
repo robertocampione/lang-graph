@@ -25,12 +25,11 @@ def fetch_prior_cases(case_id: str | None = None, correlation_id: str | None = N
     query = """
         SELECT timestamp::text, node_name, actor_type, summary, correlation_id, case_id, thread_id, payload_summary
         FROM audit_events
-        WHERE (%s IS NOT NULL AND case_id = %s)
-           OR (%s IS NOT NULL AND correlation_id = %s)
+        WHERE case_id = %s OR correlation_id = %s
         ORDER BY timestamp DESC
         LIMIT %s
     """
-    return _safe_fetch_all(query, (case_id, case_id, correlation_id, correlation_id, limit))
+    return _safe_fetch_all(query, (case_id, correlation_id, limit))
 
 
 def fetch_prior_human_reviews(ticket_raw: str | None = None, limit: int = 5) -> list[dict[str, Any]]:

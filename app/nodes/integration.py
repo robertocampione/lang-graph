@@ -185,7 +185,7 @@ def integration(state: GraphState) -> dict:
     )
 
     return {
-        "messages": [f"[integration] Context loaded. {summary}"],
+        "messages": [f"Integration: Context loaded. {summary}"],
         "audit_log": [audit_entry],
         "memory_context": memory_context,
         "bci_case_context": bci_case,

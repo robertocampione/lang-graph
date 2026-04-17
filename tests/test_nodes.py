@@ -140,7 +140,7 @@ def test_integration_node(base_state_triage):
     assert "installed_base_context" in result
 
     # C-1001 exists in mock database
-    assert result["customer_context"].name == "Acme Corp"
+    assert result["customer_context"].name == "Synthetic Fiber Home"
     assert result["customer_context"].tier == "gold"
     assert result["customer_context"].oldest_pending_days == 12
     assert result["pending_order_context"].order_type == "provision"
@@ -416,8 +416,8 @@ def test_recommendation_node(base_state_triage):
     assert "recommendation" in result
     rec = result["recommendation"]
 
-    assert rec.decision == "HOLD_CASE"
-    assert "SAME_SCOPE_PENDING" in rec.rationale
+    assert rec.decision == "BLOCKED"
+    assert "SAME_SCOPE_PENDING" in rec.reason
     assert result["execution_guardrails"].required_human_review is True
 
 
@@ -435,7 +435,7 @@ def test_auto_execute_node(base_state_triage):
         confidence=1.0
     )
     base_state_triage["recommendation"] = Recommendation(
-        decision="ALLOW_FOLLOW_ON", rationale="test", suggested_human_action="test", missing_fields=[], executable_action_possible=True, confidence=1.0
+        decision="ALLOWED", reason="test", applied_rules=["scope.different_scope_allowed"], requires_human=False, confidence=1.0
     )
 
     result = auto_execute(base_state_triage)
@@ -443,7 +443,7 @@ def test_auto_execute_node(base_state_triage):
     import json
     assert "execution_result" in result
     res_dict = json.loads(result["execution_result"])
-    assert res_dict["action_taken"] == "ALLOW_FOLLOW_ON"
+    assert res_dict["action_taken"] == "ALLOWED"
     assert res_dict["status"] == "success"
     assert result["execution_guardrails"].allowed is True
 
@@ -457,7 +457,7 @@ def test_auto_execute_blocks_unsafe_direct_call(base_state_triage):
         confidence=1.0
     )
     base_state_triage["recommendation"] = Recommendation(
-        decision="ALLOW_FOLLOW_ON", rationale="stale", suggested_human_action="test", missing_fields=[], executable_action_possible=True, confidence=1.0
+        decision="ALLOWED", reason="stale", applied_rules=[], requires_human=False, confidence=1.0
     )
 
     result = auto_execute(base_state_triage)
@@ -478,7 +478,7 @@ def test_execution_guardrails_require_allow_validation(base_state_triage):
         confidence=1.0
     )
     base_state_triage["recommendation"] = Recommendation(
-        decision="ALLOW_FOLLOW_ON", rationale="stale", suggested_human_action="test", missing_fields=[], executable_action_possible=True, confidence=1.0
+        decision="ALLOWED", reason="stale", applied_rules=[], requires_human=False, confidence=1.0
     )
 
     guardrails = evaluate_execution_guardrails(base_state_triage)
@@ -497,7 +497,7 @@ def test_execution_guardrails_block_low_confidence(base_state_triage):
         confidence=1.0
     )
     base_state_triage["recommendation"] = Recommendation(
-        decision="ALLOW_FOLLOW_ON", rationale="weak", suggested_human_action="test", missing_fields=[], executable_action_possible=True, confidence=0.5
+        decision="ALLOWED", reason="weak", applied_rules=[], requires_human=False, confidence=0.5
     )
 
     guardrails = evaluate_execution_guardrails(base_state_triage)
@@ -516,7 +516,7 @@ def test_execution_guardrails_block_low_triage_confidence(base_state_triage):
         confidence=1.0
     )
     base_state_triage["recommendation"] = Recommendation(
-        decision="ALLOW_FOLLOW_ON", rationale="weak triage", suggested_human_action="test", missing_fields=[], executable_action_possible=True, confidence=1.0
+        decision="ALLOWED", reason="weak triage", applied_rules=[], requires_human=False, confidence=1.0
     )
 
     guardrails = evaluate_execution_guardrails(base_state_triage)
@@ -536,8 +536,7 @@ def test_execution_guardrails_require_dry_run_action_plan(base_state_triage):
         confidence=1.0
     )
     base_state_triage["recommendation"] = Recommendation(
-        decision="ALLOW_FOLLOW_ON", rationale="test", suggested_human_action="test",
-        missing_fields=[], executable_action_possible=True, confidence=1.0
+        decision="ALLOWED", reason="test", applied_rules=[], requires_human=False, confidence=1.0
     )
     base_state_triage["action_plan"] = ActionPlan(
         action_type="PREPARE_SECOND_ORDER",
@@ -558,7 +557,7 @@ def test_routing_logic(base_state_triage):
     """
     # Escalate / hold -> human_review
     base_state_triage["recommendation"] = Recommendation(
-        decision="HOLD_CASE", rationale="test", suggested_human_action="test", missing_fields=[], executable_action_possible=False, confidence=1.0
+        decision="BLOCKED", reason="test", applied_rules=[], requires_human=True, confidence=1.0
     )
     assert route_after_recommendation(base_state_triage) == "human_review"
 
@@ -572,13 +571,13 @@ def test_routing_logic(base_state_triage):
         confidence=1.0
     )
     base_state_triage["recommendation"] = Recommendation(
-        decision="ALLOW_FOLLOW_ON", rationale="test", suggested_human_action="test", missing_fields=[], executable_action_possible=True, confidence=1.0
+        decision="ALLOWED", reason="test", applied_rules=[], requires_human=False, confidence=1.0
     )
     assert route_after_recommendation(base_state_triage) == "auto_execute"
 
     # Allow-looking but non-executable -> human_review
     base_state_triage["recommendation"] = Recommendation(
-        decision="ALLOW_FOLLOW_ON", rationale="test", suggested_human_action="test", missing_fields=[], executable_action_possible=False, confidence=1.0
+        decision="ALLOWED", reason="test", applied_rules=[], requires_human=True, confidence=1.0
     )
     assert route_after_recommendation(base_state_triage) == "human_review"
 
@@ -592,7 +591,7 @@ def test_human_review_payload_includes_guardrails(base_state_triage):
         confidence=1.0
     )
     base_state_triage["recommendation"] = Recommendation(
-        decision="REQUEST_INFO", rationale="test", suggested_human_action="Ask for customer ID", missing_fields=["customer_id"], executable_action_possible=False, confidence=1.0
+        decision="NEEDS_INFO", reason="test", applied_rules=[], requires_human=True, confidence=1.0
     )
 
     result = human_review(base_state_triage)
@@ -626,4 +625,4 @@ def test_end_to_end_graph(base_state_triage, patch_llm_chain_triage):
     decision = getattr(rec, "decision", rec.get("decision") if isinstance(rec, dict) else None)
 
     # Based on MOCK_PENDING_ORDERS, C-1001 has "installation_pending": True, so it should BLOCK!
-    assert decision == "HOLD_CASE"
+    assert decision == "BLOCKED"

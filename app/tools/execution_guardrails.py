@@ -34,13 +34,13 @@ def evaluate_execution_guardrails(state: dict[str, Any]) -> ExecutionGuardrailRe
         observed_confidence = 0.0
     else:
         decision = _get_value(recommendation, "decision", "UNKNOWN")
-        executable = bool(_get_value(recommendation, "executable_action_possible", False))
+        requires_human = bool(_get_value(recommendation, "requires_human", True))
         observed_confidence = float(_get_value(recommendation, "confidence", 0.0) or 0.0)
 
-        if decision != "ALLOW_FOLLOW_ON":
+        if decision != "ALLOWED":
             reasons.append("DECISION_NOT_ALLOW_FOLLOW_ON")
-        if not executable:
-            reasons.append("EXECUTABLE_FLAG_FALSE")
+        if requires_human:
+            reasons.append("REQUIRES_HUMAN_INTERVENTION")
         if observed_confidence < settings.AUTO_EXECUTE_MIN_CONFIDENCE:
             reasons.append("CONFIDENCE_BELOW_THRESHOLD")
 

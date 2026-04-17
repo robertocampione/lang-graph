@@ -334,8 +334,9 @@ def validation(state: GraphState) -> dict:
         },
     )
 
+    display_status = "ALLOWED" if status == "ALLOW" else "BLOCKED" if status in ["BLOCK", "ESCALATE"] else "NEEDS_INFO"
     return {
-        "messages": [f"[validation] Completed. Status: {status}. Reasons: {', '.join(val_result.reason_codes)}"],
+        "messages": [f"Validation: {display_status} ({', '.join(val_result.reason_codes)})"],
         "audit_log": [audit_entry],
         "validation_result": val_result,
     }

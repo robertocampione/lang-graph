@@ -36,7 +36,7 @@ def auto_execute(state: GraphState) -> dict:
             "guardrail_reasons": guardrails.reasons,
         })
         return {
-            "messages": [f"[auto_execute] {detail}"],
+            "messages": [f"Auto Execute: {detail}"],
             "audit_log": [audit_entry],
             "execution_guardrails": guardrails,
             "execution_result": execution_res_str,
@@ -74,7 +74,7 @@ def auto_execute(state: GraphState) -> dict:
     })
 
     return {
-        "messages": [f"[auto_execute] {execution_detail}"],
+        "messages": [f"Auto Execute: {execution_detail}"],
         "audit_log": [audit_entry],
         "execution_guardrails": guardrails,
         "execution_result": execution_res_str

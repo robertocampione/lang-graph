@@ -117,7 +117,17 @@ Tests run fully offline using mocked DB and LLM layers.
 PYTHONPATH=. python scripts/run_demo_cases.py --continuous
 ```
 
-The demo runner uses curated BCI/SALTO stories, real DB reads by default, and dry-run action handling by default. It demonstrates both Phase 1 HITL recommendations and Phase 2 dry-run action plans. For a fully offline smoke demo:
+The demo runner uses curated BCI/SALTO stories, real DB reads by default, and dry-run action handling by default. It demonstrates both Phase 1 HITL recommendations and Phase 2 dry-run action plans. 
+
+### Core Demo Scenarios
+The demo runs 5 key business scenarios representing standard handling:
+- **Same Scope Block**: Evaluates Fiber + Fiber request on the same customer, resulting in `BLOCKED` (Phase 1).
+- **Explicit Exception**: Evaluates a SIM Swap request on an explicitly marked Mobile order, resulting in `ALLOWED` (Phase 2 Auto-eligible).
+- **Missing Info**: Evaluates an intake request lacking a Customer ID, resulting in `NEEDS_INFO` (Phase 1).
+- **Valid Follow-on**: Evaluates a TV request while a Fiber order is pending, resulting in `ALLOWED` (Phase 2 Auto-eligible).
+- **Human Override**: Evaluates a scenario where guardrails force human review via low confidence or missing information, resulting in `NEEDS_INFO` or `BLOCKED`.
+
+For a fully offline smoke demo:
 
 ```bash
 PYTHONPATH=. python scripts/run_demo_cases.py --source offline --continuous
@@ -178,8 +188,8 @@ The triage node extracts BCI-oriented fields such as `bci_case_id`, `intake_chan
 Automatic execution is protected by deterministic guardrails in `app/tools/execution_guardrails.py`. The graph routes to `auto_execute` only when all of these are true:
 
 - `ENABLE_AUTO_EXECUTE=true`
-- recommendation decision is `ALLOW_FOLLOW_ON`
-- `executable_action_possible=true`
+- recommendation decision is `ALLOWED`
+- `requires_human=false`
 - `action_plan.auto_eligible=true`
 - `action_plan.action_type` is a supported dry-run action (`INTRODUCE_SECOND_ORDER_DRY_RUN` or `AMEND_ORDER_DRY_RUN`)
 - `action_plan.target_system=SALTO`
@@ -205,4 +215,4 @@ Graph state carries trace fields for `correlation_id`, `case_id`, optional `thre
 - **Audit trail and memory**: core nodes write enriched audit events and can surface lightweight historical context
 - **Golden evaluation**: stable offline fixtures exercise known allow/block/need-info scenarios without live LLMs
 - **Human-in-the-Loop**: `interrupt_before=["human_review"]` pauses the graph for operator approval
-- **Conditional routing**: only `ALLOW_FOLLOW_ON` with an eligible dry-run action plan triggers auto-execution; everything else requires human review
+- **Conditional routing**: only `ALLOWED` with an eligible dry-run action plan triggers auto-execution; everything else requires human review

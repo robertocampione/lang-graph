@@ -191,12 +191,11 @@ class ValidationResult(BaseModel):
 
 class Recommendation(BaseModel):
     """The final actionable resolution, formatted for the human operator."""
-    decision: str = Field(description="The exact executable action to take (e.g. FLAG_FOR_MANUAL_REVIEW, REQUEST_ID, etc.)")
-    rationale: str = Field(description="Clear multi-line explanation translated from the validation node code.")
-    suggested_human_action: str = Field(description="Advice for the frontoffice human reviewer (e.g. 'Call the customer and ask for an invoice').")
-    missing_fields: List[str] = Field(description="Same as validation missing_info")
-    executable_action_possible: bool = Field(description="True if auto-execute tool can handle it.")
-    confidence: float = Field(description="Confidence translation")
+    decision: str = Field(description="ALLOWED | BLOCKED | NEEDS_INFO")
+    reason: str = Field(description="Short human-readable explanation")
+    applied_rules: List[str] = Field(description="List of applied rule IDs")
+    confidence: float = Field(description="Confidence from 0.0 to 1.0")
+    requires_human: bool = Field(description="True if human intervention is necessary")
 
 
 class ActionPlan(BaseModel):
@@ -227,6 +226,8 @@ class GraphState(TypedDict):
     """
     messages: Annotated[list, operator.add]
     ticket_raw: str
+    ticket_language: NotRequired[str]
+    output_language: NotRequired[str]
     correlation_id: NotRequired[str]
     case_id: NotRequired[str]
     thread_id: NotRequired[str]

@@ -489,7 +489,7 @@ def _print_case_result(case: DemoCase, state: dict[str, Any], *, iteration: int,
     print(f"Reason codes: {', '.join(validation_result.reason_codes) or 'none'}")
     print(f"Applied rules: {', '.join(validation_result.rules_used) or 'none'}")
     print(f"Missing fields: {', '.join(validation_result.missing_info) or 'none'}")
-    print(f"Recommendation: {rec.decision} | executable={rec.executable_action_possible}")
+    print(f"Recommendation: {rec.decision} | requires_human={rec.requires_human}")
     if action_plan:
         print(f"Action plan: {action_plan.action_type} on {action_plan.target_system} | auto_eligible={action_plan.auto_eligible}")
     print(f"Execution guardrails: {', '.join(guardrails.reasons) if guardrails else 'not evaluated'}")

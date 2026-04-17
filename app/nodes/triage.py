@@ -228,7 +228,7 @@ def triage(state: GraphState) -> dict:
             payload={"confidence": 0.0, "issues": ["empty_ticket"]},
         )
         return {
-            "messages": ["[triage] No raw ticket provided."],
+            "messages": ["Triage: No raw ticket provided."],
             "audit_log": [audit_entry],
             "ticket_structured": ticket,
             **_observability_update(
@@ -309,7 +309,7 @@ def triage(state: GraphState) -> dict:
     correlation_id = state.get("correlation_id") or case_id
 
     return {
-        "messages": [f"[triage] Ticket parsed by LLM. customer_id={result.customer_id} conf={result.confidence_score}"],
+        "messages": [f"Triage: Extracted customer_id={result.customer_id}, confidence={result.confidence_score}"],
         "case_id": case_id,
         "correlation_id": correlation_id,
         "audit_log": [audit_entry],

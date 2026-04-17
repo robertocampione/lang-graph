@@ -17,7 +17,7 @@ def policy_retrieval(state: GraphState) -> dict:
     )
 
     return {
-        "messages": [f"[policy_retrieval] Retrieved {len(matched_rule_ids)} local rules: {', '.join(matched_rule_ids) or 'none'}"],
+        "messages": [f"Policy: Retrieved {len(matched_rule_ids)} local rules: {', '.join(matched_rule_ids) or 'none'}"],
         "audit_log": [audit_entry],
         "retrieved_rules": rules
     }

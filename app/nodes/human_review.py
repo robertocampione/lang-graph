@@ -15,9 +15,9 @@ def human_review(state: GraphState) -> dict:
     ticket_raw = state.get("ticket_raw", "")
 
     decision = getattr(rec_obj, "decision", "UNKNOWN") if rec_obj else "UNKNOWN"
-    rationale = getattr(rec_obj, "rationale", "") if rec_obj else ""
-    suggested = getattr(rec_obj, "suggested_human_action", "") if rec_obj else ""
-    missing = list(getattr(rec_obj, "missing_fields", [])) if rec_obj else []
+    rationale = getattr(rec_obj, "reason", "") if rec_obj else ""
+    suggested = ""
+    missing = list(getattr(state.get("validation_result"), "missing_info", [])) if state.get("validation_result") else []
     validation_result = state.get("validation_result")
     action_plan = state.get("action_plan")
     guardrails = evaluate_execution_guardrails(state)
@@ -52,7 +52,7 @@ def human_review(state: GraphState) -> dict:
     )
 
     return {
-        "messages": [f"[human_review] Case reviewed by a human agent. Decision: {decision}"],
+        "messages": [f"Human Review: Case reviewed by a human agent. Decision: {decision}"],
         "audit_log": [audit_entry],
         "execution_guardrails": guardrails,
         "human_review_payload": review_payload,

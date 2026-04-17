@@ -61,22 +61,43 @@ def _build_action_plan(validation_result, state: GraphState) -> ActionPlan:
     )
 
 
-def recommendation(state: GraphState) -> dict:
-    """
-    Produce a Phase 1 operator recommendation and a Phase 2 action plan.
+def _translate_reason(decision: str, codes: list, lang: str) -> str:
+    templates = {
+        "ALLOWED": {
+            "en": "Order allowed. Applied rules: {codes}",
+            "fr": "Commande autorisée. Règles respectées: {codes}",
+            "nl": "Bestelling toegestaan. Regels toegepast: {codes}"
+        },
+        "BLOCKED": {
+            "en": "Order blocked due to: {codes}",
+            "fr": "Commande bloquée (raison: {codes})",
+            "nl": "Bestelling geblokkeerd (reden: {codes})"
+        },
+        "NEEDS_INFO": {
+            "en": "Needs information: {codes}",
+            "fr": "Nécessite des informations: {codes}",
+            "nl": "Heeft informatie nodig: {codes}"
+        }
+    }
+    lang = lang.lower() if lang else "en"
+    if lang not in ["en", "fr", "nl"]:
+        lang = "en"
+    
+    code_str = ", ".join(codes) if codes else "general checks"
+    return templates.get(decision, templates["BLOCKED"])[lang].format(codes=code_str)
 
-    This node formats deterministic validation output. It does not make policy.
-    """
+
+def recommendation(state: GraphState) -> dict:
     validation_result = state.get("validation_result")
+    lang = state.get("output_language", "en")
 
     if not validation_result:
         rec = Recommendation(
-            decision="ERROR",
-            rationale="Validation node did not produce a result.",
-            suggested_human_action="Review system logs.",
-            missing_fields=[],
-            executable_action_possible=False,
+            decision="BLOCKED",
+            reason="Validation failed to produce an output.",
+            applied_rules=["SYSTEM_ERROR"],
             confidence=0.0,
+            requires_human=True,
         )
         action_plan = ActionPlan(
             action_type="ESCALATE_TO_BACK_OFFICE",
@@ -87,7 +108,7 @@ def recommendation(state: GraphState) -> dict:
         )
         guardrails = evaluate_execution_guardrails({**state, "recommendation": rec, "action_plan": action_plan})
         return {
-            "messages": ["[recommendation] ERROR: No ValidationResult found in state."],
+            "messages": ["[recommendation] ERROR: No ValidationResult found."],
             "recommendation": rec,
             "action_plan": action_plan,
             "execution_guardrails": guardrails,
@@ -95,56 +116,47 @@ def recommendation(state: GraphState) -> dict:
 
     action_plan = _build_action_plan(validation_result, state)
     status = validation_result.status
+    codes = validation_result.reason_codes
 
     if status == "NEED_INFO":
-        decision = "REQUEST_INFO"
-        suggested_action = f"Contact the intake owner or customer to request: {', '.join(validation_result.missing_info)}."
-    elif status == "BLOCK":
-        decision = "HOLD_CASE"
-        suggested_action = "Hold the BCI case and add the SALTO blocking reason as a remark."
-    elif status == "ESCALATE":
-        decision = "ESCALATE"
-        suggested_action = "Escalate immediately to the back-office queue."
+        decision = "NEEDS_INFO"
+        requires_human = True
+    elif status == "BLOCK" or status == "ESCALATE":
+        decision = "BLOCKED"
+        requires_human = True
     elif status == "ALLOW":
-        decision = "ALLOW_FOLLOW_ON"
-        suggested_action = "Proceed with the action plan. Dry-run automation may continue if guardrails pass."
+        decision = "ALLOWED"
+        requires_human = False
     else:
-        decision = "UNKNOWN"
-        suggested_action = "Manual review required due to unknown validation status."
-
-    rationale = f"Validation Status: {status}\n"
-    if validation_result.reason_codes:
-        rationale += f"Reasons: {', '.join(validation_result.reason_codes)}\n"
-    if validation_result.blocking_conditions:
-        rationale += "Details:\n - " + "\n - ".join(validation_result.blocking_conditions)
-    rationale += f"\nAction Plan: {action_plan.action_type} on {action_plan.target_system}"
+        decision = "BLOCKED"
+        requires_human = True
+        
+    reason = _translate_reason(decision, codes, lang)
 
     rec = Recommendation(
         decision=decision,
-        rationale=rationale.strip(),
-        suggested_human_action=suggested_action,
-        missing_fields=list(validation_result.missing_info),
-        executable_action_possible=action_plan.auto_eligible,
+        reason=reason,
+        applied_rules=validation_result.rules_used,
         confidence=validation_result.confidence,
+        requires_human=requires_human
     )
 
     guardrails = evaluate_execution_guardrails({**state, "recommendation": rec, "action_plan": action_plan})
     audit_entry = write_audit_event(
         "recommendation",
-        f"Decision: {rec.decision}. Action: {action_plan.action_type}. Auto eligible: {action_plan.auto_eligible}",
+        f"Decision: {rec.decision}. Auto eligible: {action_plan.auto_eligible}",
         state={**state, "recommendation": rec, "action_plan": action_plan, "execution_guardrails": guardrails},
         payload={
             "decision": rec.decision,
+            "reason": rec.reason,
+            "requires_human": rec.requires_human,
             "action_type": action_plan.action_type,
-            "target_system": action_plan.target_system,
-            "auto_eligible": action_plan.auto_eligible,
-            "guardrail_reasons": guardrails.reasons,
-            "memory_context": state.get("memory_context", {}),
+            "auto_eligible": action_plan.auto_eligible
         },
     )
 
     return {
-        "messages": [f"[recommendation] Decision: {rec.decision}. Action plan: {action_plan.action_type}."],
+        "messages": [f"Recommendation: {rec.decision} ({rec.reason})"],
         "audit_log": [audit_entry],
         "recommendation": rec,
         "action_plan": action_plan,
