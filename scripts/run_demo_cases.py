@@ -7,13 +7,15 @@ from typing import Any
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from app.graphs.pending_orders import route_after_recommendation
+from app.graphs.pending_orders import route_to_approval, route_after_approval
 from app.nodes import auto_execute as auto_execute_module
 from app.nodes import human_review as human_review_module
 from app.nodes import integration as integration_module
 from app.nodes import policy_retrieval as policy_retrieval_module
 from app.nodes import recommendation as recommendation_module
 from app.nodes import validation as validation_module
+from app.nodes.chat_wrapper import chat_wrapper
+from app.nodes.approval import approval_level_1, approval_level_2
 from app.nodes.auto_execute import auto_execute
 from app.nodes.human_review import human_review
 from app.nodes.integration import integration
@@ -444,25 +446,36 @@ def _run_pipeline(case: DemoCase, *, source: str, persist_actions: bool, prior_m
     state = _merge(state, recommendation(state))
 
     state["execution_guardrails"] = evaluate_execution_guardrails(state)
-    route = route_after_recommendation(state)
+    route = route_to_approval(state)
     state["route"] = route
 
-    if route == "auto_execute":
-        if persist_actions:
-            state = _merge(state, auto_execute(state))
-        else:
-            action_plan = state.get("action_plan")
-            state["execution_result"] = json.dumps({
-                "status": "dry_run",
-                "action_taken": getattr(action_plan, "action_type", state["recommendation"].decision),
-                "target_system": getattr(action_plan, "target_system", "SALTO"),
-                "detail": "Auto-execution was skipped because --persist-actions was not set.",
-            })
-    else:
+    if route == "human_review":
         if persist_actions:
             state = _merge(state, human_review(state))
         else:
             state["human_review"] = f"Dry-run review required: {state['recommendation'].decision}"
+    else:
+        # Approval layer
+        if route == "approval_level_1":
+            state = _merge(state, approval_level_1(state))
+        elif route == "approval_level_2":
+            state = _merge(state, approval_level_2(state))
+
+        after_approval = route_after_approval(state)
+        
+        if after_approval == "auto_execute":
+            if persist_actions:
+                state = _merge(state, auto_execute(state))
+            else:
+                action_plan = state.get("action_plan")
+                state["execution_result"] = json.dumps({
+                    "status": "dry_run",
+                    "action_taken": getattr(action_plan, "action_type", state["recommendation"].decision),
+                    "target_system": getattr(action_plan, "target_system", "SALTO"),
+                    "detail": "Auto-execution was skipped because --persist-actions was not set.",
+                })
+        else:
+            state["execution_result"] = "Execution halted due to approval rejection."
 
     return state
 

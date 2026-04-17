@@ -225,6 +225,7 @@ class GraphState(TypedDict):
     Keys map to the business lifecycle.
     """
     messages: Annotated[list, operator.add]
+    user_text: NotRequired[str]
     ticket_raw: str
     ticket_language: NotRequired[str]
     output_language: NotRequired[str]
@@ -262,6 +263,13 @@ class GraphState(TypedDict):
     execution_result: str
     execution_guardrails: NotRequired[ExecutionGuardrailResult]
     human_review_payload: NotRequired[Dict[str, Any]]
+
+    # Approval Routing
+    approval_required: NotRequired[bool]
+    approval_level: NotRequired[int]
+    approval_status: NotRequired[str]
+    approval_history: NotRequired[List[Dict[str, Any]]]
+    current_approver_role: NotRequired[str]
 
     # Optional observability fields
     audit_log: Annotated[list, operator.add]

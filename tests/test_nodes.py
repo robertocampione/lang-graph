@@ -149,7 +149,7 @@ def test_integration_node(base_state_triage):
 from app.nodes.policy_retrieval import policy_retrieval
 from app.nodes.auto_execute import auto_execute
 from app.nodes.human_review import human_review
-from app.graphs.pending_orders import route_after_recommendation
+from app.graphs.pending_orders import route_to_approval, route_after_approval
 from app.tools.execution_guardrails import evaluate_execution_guardrails
 from app.tools.rule_loader import load_rule_documents
 
@@ -559,9 +559,9 @@ def test_routing_logic(base_state_triage):
     base_state_triage["recommendation"] = Recommendation(
         decision="BLOCKED", reason="test", applied_rules=[], requires_human=True, confidence=1.0
     )
-    assert route_after_recommendation(base_state_triage) == "human_review"
+    assert route_to_approval(base_state_triage) == "human_review"
 
-    # Allow -> auto_execute
+    # Allow -> approval_level_1 (default high confidence)
     base_state_triage["validation_result"] = ValidationResult(
         status="ALLOW",
         reason_codes=["NO_CONFLICTS"],
@@ -573,13 +573,26 @@ def test_routing_logic(base_state_triage):
     base_state_triage["recommendation"] = Recommendation(
         decision="ALLOWED", reason="test", applied_rules=[], requires_human=False, confidence=1.0
     )
-    assert route_after_recommendation(base_state_triage) == "auto_execute"
+    base_state_triage["confidence_summary"] = {"overall": 1.0}
+    assert route_to_approval(base_state_triage) == "approval_level_1"
+
+    # Allow but low confidence -> approval_level_2
+    base_state_triage["confidence_summary"] = {"overall": 0.6}
+    assert route_to_approval(base_state_triage) == "approval_level_2"
 
     # Allow-looking but non-executable -> human_review
     base_state_triage["recommendation"] = Recommendation(
         decision="ALLOWED", reason="test", applied_rules=[], requires_human=True, confidence=1.0
     )
-    assert route_after_recommendation(base_state_triage) == "human_review"
+    assert route_to_approval(base_state_triage) == "human_review"
+
+def test_route_after_approval(base_state_triage):
+    from langgraph.graph import END
+    base_state_triage["approval_status"] = "rejected"
+    assert route_after_approval(base_state_triage) == END
+    
+    base_state_triage["approval_status"] = "approved"
+    assert route_after_approval(base_state_triage) == "auto_execute"
 
 def test_human_review_payload_includes_guardrails(base_state_triage):
     base_state_triage["validation_result"] = ValidationResult(
